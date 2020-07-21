@@ -1,0 +1,14 @@
+#
+# This file is the Systemd-unit-description file for tracker.
+#
+# This file is to be placed @
+#  /etc/systemd/system/tracker.service
+#
+
+[Unit]
+Description=Tracker service
+
+[Service]
+Type=forking
+NotifyAccess=all
+ExecStart=/usr/bin/tracker
