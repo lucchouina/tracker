@@ -4,7 +4,25 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/syscall.h>
+
 #include "trkdbg.h"
+
+int sys_write(int fd, void *buf, int len)
+{
+    return syscall(SYS_write, fd, buf, len);
+}
+
+int sys_read(int fd, void *buf, int len)
+{
+    return syscall(SYS_read, fd, buf, len);
+}
+
+int sys_select(int nfd, fd_set *r, fd_set *w, fd_set *e, struct timeval *tv)
+{
+    return syscall(SYS_select, nfd, r, w, e, tv);
+}
+
 static int dbglvl=0;
 
 void trkdbg(int level, int doerr, int die, const char *fmt, ...)
@@ -33,9 +51,20 @@ static int pid=-1;
     }
     if(docr || doerr) *p++='\n';
     *p='\0';
-    write(2, msg, p-msg);
+    sys_write(2, msg, p-msg);
     va_end(ap);
     if(die) exit(1);
+}
+
+void trkdbgContinue(int level, const char *fmt, ...)
+{
+va_list ap;
+char msg[1024];
+
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof msg-1, fmt, ap);
+    msg[sizeof msg -1]='\0';
+    sys_write(2, msg, strlen(msg));
 }
 
 void dbgsetlvl(int level)
@@ -57,10 +86,10 @@ struct timeval tv={ tv_sec: ACK_TIMEOUT };
 
     FD_ZERO(&fdset);
     FD_SET(fd, &fdset);
-    if((n=select(fd+1, &fdset, 0, 0, &tv))>0) {
+    if((n=sys_select(fd+1, &fdset, 0, 0, &tv))>0) {
 
         trkdbg(1,0,0,"recvAck for seq %d\n", *seq);
-        if(read(fd, &pkt, CMDLEN) != CMDLEN) {
+        if(sys_read(fd, &pkt, CMDLEN) != CMDLEN) {
             trkdbg(1,1,0,"Failed pkt read.\n", fd);
         }
         else {
@@ -104,12 +133,12 @@ int pos=0;
     pkt.seq=seq;
     pkt.aux[0]=aux;
     pkt.aux[1]=aux2;
-    if(write(fd, &pkt, CMDLEN)==CMDLEN) {
+    if(sys_write(fd, &pkt, CMDLEN)==CMDLEN) {
     
         if(pmore) {
             while(more) {
 
-                int nw=write(fd, pmore+pos, more);
+                int nw=sys_write(fd, pmore+pos, more);
 
                 if(nw<0) return 0;
                 more -= nw;
@@ -124,7 +153,7 @@ int pos=0;
                 while(left) {
                 
                     int nw;
-                    if((nw=write(fd, buf+lpos, left)) < 0) return 0;
+                    if((nw=sys_write(fd, buf+lpos, left)) < 0) return 0;
                     left-=nw;
                     lpos+=nw;
                 }
@@ -146,7 +175,7 @@ int rcvCmd(int fd, int (*cb)(int idx, cmd_t *cmd, int more, char *pmore), int id
 cmd_t pkt;
 
     trkdbg(1,0,0,"rcvCmd on fd %d idx %d\n", fd, idx);
-    if(read(fd, &pkt, CMDLEN) != CMDLEN) {
+    if(sys_read(fd, &pkt, CMDLEN) != CMDLEN) {
         trkdbg(1,1,0,"Failed pkt read fd=%d.\n", fd);
     }
     else {
@@ -169,7 +198,7 @@ cmd_t pkt;
                 if((pmore=malloc(left))) { // XXX This is from the serve size only at this time. 
                                            // So calling malloc is fine. should call realMalloc  if client
                     int nr=1, pos=0;
-                    while(left && (nr=read(fd, pmore+pos, left))>0) {
+                    while(left && (nr=sys_read(fd, pmore+pos, left))>0) {
                         left-=nr;
                         pos+=nr;
                     }
@@ -184,7 +213,7 @@ cmd_t pkt;
                    /* do our best to read and drop the rest of the command */
                     int nr=1, pos=0;
                     trkdbg(0,0,0,"Out of memory on xtra payload buffer allocation for %d bytes\n", left);
-                    while(left && (nr=read(fd, pmore+pos, left))>0) {
+                    while(left && (nr=sys_read(fd, pmore+pos, left))>0) {
                         left-=nr;
                         pos+=nr;
                     }

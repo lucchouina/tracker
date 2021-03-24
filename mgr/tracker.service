@@ -11,4 +11,4 @@ Description=Tracker service
 [Service]
 Type=forking
 NotifyAccess=all
-ExecStart=/usr/bin/tracker
+ExecStart=/usr/bin/trackerd

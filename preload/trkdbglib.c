@@ -56,7 +56,7 @@ int ismgr=1;
 
 /* some of the config variables we use */
 extern uint32_t enable, tracking, validate, poison, alloctag;
-static uint32_t pagesize, curalloc=0, initted=0, ininit=0;
+static uint32_t pagesize, curalloc=0, untracked=0, initted=0, ininit=0;
 
 /* lock for mp support */
 static pthread_mutex_t trkm=PTHREAD_MUTEX_INITIALIZER;
@@ -152,6 +152,20 @@ struct {
     type_fork       *realFork;
 
 } realFuncs;
+
+/* dump in hex the content of the supplied subber */
+static void dump(void *p, int n)
+{
+#define NC 8
+uint32_t *pi=(typeof(pi))p;
+int nw=n/sizeof(*pi), i;
+    trkdbg(0,0,0, "Dumping %d words @ %p\n", nw, p);
+    for(i=0;i<nw;i++,pi++) {
+        if(!(i%NC)) trkdbgContinue(0, "\n    %p", pi);
+        trkdbgContinue(0, " %08x", *pi);
+    }
+    trkdbgContinue(0, "\n");
+}
 
 static int countFds(int tag);
 static void addFds(void *, uint32_t sizeslot, int curpos, int maxpos, int tag);
@@ -287,7 +301,7 @@ static void myfree(void *ptr)
 /********************************************************************************/
 
 /* make the dyn lynker call trkdbginit() right after the load */
-static void init_lib(void) __attribute__((constructor(10000)));
+static void init_lib(void) __attribute__((constructor));
 static void init_lib(void) {
 char *dbgvalstr;
 int dbgval;
@@ -522,54 +536,47 @@ static __inline__ uint32_t chkblock(void *ptr)
     - trim up the size to the nearest int32_t
     - check if we've been turned on.
 */
-static void *tp_alloc(size_t size, int zero, size_t alignment)
+static void *tp_alloc(size_t size, int zeroize)
 {
     trkblk_t *tp;
     size_t tpsize;
     uint32_t overhead;
     char *p;
     
-    trkdbg(1,0,0,"tp_alloc: size=%d\n", size);
+    trkdbg(0,0,0,"tp_alloc: size=%d (aligned size %d) zeroize=%d\n", size, trkAlign(size), zeroize);
     size=trkAlign(size);
-    if(tracking) overhead=sizeof *tp+sizeof MAGIC1;
-    else overhead=(OFFSET_NWORDS+1) * sizeof(uint32_t);
-    
-    // compute the final size and the offset based on alignment need
-    // if alignment is specified we need to allocate three times the alignement more
-    // then the asked size. Assuming the worst case where size is a multiple of 
-    // the alignment and given the fact that we have a header and footer to
-    // install. If the alignment is less then the needed overhead we compute 
-    // the next alignment up (power of two) that is greater then the overhead.
-    if(!alignment) alignment=__SIZEOF_POINTER__;
-    tpsize=((alignment+overhead)<<1) + size;
-    trkdbg(1,0,0,"Tpsize=%d realFunc.realMalloc=%p tracking=%d\n", tpsize, realFuncs.realMalloc, tracking); 
-    if((p=realFuncs.realMalloc(tpsize))) {
-    
+    if(tracking) overhead=sizeof *tp;
+    else overhead=(OFFSET_NWORDS) * sizeof(uint32_t);
+
+    tpsize=overhead+size;
+    trkdbg(0,0,0,"Tpsize=%d overhead=%d tracking=%d\n", tpsize, overhead, tracking);
+    if(zeroize) p=realFuncs.realCalloc(1, tpsize+sizeof(uint32_t));
+    else p=realFuncs.realMalloc(tpsize+sizeof(uint32_t));
+    if(p) {
         // figure out where to put tp and our offset
-        char *ph=(char*)(((size_t)p+overhead+alignment)&(~(alignment-1)));
-        
+        char *ph=(char*)(((size_t)p+overhead));
+        trkdbg(0,0,0,"p=%p ph=%p, delta=%d\n", p, ph, ph-p); 
+        curalloc += size;
+        *(((int*)(p+tpsize)))=MAGIC1;
         if(tracking) {
         
             tp=((typeof(tp))ph)-1;
+            trkdbg(0,0,0,"tp=%p p=%p delta=%d\n", tp, p, (char*)tp-p); 
+
             // get the back track
             tp_gettrace(tp->callers, MAXCALLERS);
             tp->size=size;
             tp->magic=MAGIC2;
             tp->offset=ph-p;
             tp->tag=alloctag;
-            if(zero) bzero(tp+1, size);
-            *(int*)(ph+size)=MAGIC1;
             
             /* add this block to the allocation list */
-            trkdbg(1,0,0,"Tracking one more - locking.\n");
             LOCK;
-            trkdbg(1,0,0,"done.\n");
             LIST_INSERT_HEAD(&alist[tp->tag].list, tp, list);
             alist[tp->tag].total += size;
-            curalloc += size;
-            trkdbg(1,0,0,"Tracking return %p curalloc=%d, tag=%d\n", tp+1, curalloc, tp->tag);
+            trkdbg(0,0,0,"Tracking return %p curalloc=%d, tag=%d\n", tp+1, curalloc, tp->tag);
+            dump(p, tpsize+sizeof(uint32_t));
             UNLOCK;
-            return tp+1;
         }
         else {
         
@@ -577,12 +584,10 @@ static void *tp_alloc(size_t size, int zero, size_t alignment)
             pw[OFFSET_MAGIC]=MAGIC1;  // header
             pw[OFFSET_SIZE]=size;
             pw[OFFSET_OFFSET]=ph-(char*)p;
-            if(zero) bzero(p+1, size);
-            *(int*)(ph+size)=MAGIC1;
-            curalloc += size;
-            trkdbg(1,0,0,"Tagged return %p curalloc=%d\n", ph, curalloc);
-            return ph;
+            trkdbg(0,0,0,"Tagged return %p curalloc=%d\n", ph, curalloc);
+            dump(p, tpsize+sizeof(uint32_t));
         }
+        return ph;
     }
     return 0;
     
@@ -590,39 +595,44 @@ static void *tp_alloc(size_t size, int zero, size_t alignment)
 
 void *malloc(size_t size)
 {
+    void *ptr;
     if(ininit) return mymalloc(size);
     else init_lib();
-    return tp_alloc(size, 0, 0);
+    ptr=tp_alloc(size, 0);
+    trkdbg(0,0,0,"malloc - returning %p\n", ptr);
+    return ptr;
 }
 
 void *calloc(size_t nelem, size_t elsize)
 {
     if(ininit) return mycalloc(nelem, elsize);
     else {
+        void *ptr;
         init_lib();
-        return tp_alloc(nelem*elsize, 1, 0);
+        ptr=tp_alloc(nelem*elsize, 1);
+        trkdbg(0,0,0,"cmalloc - returning %p\n", ptr);
+        return ptr;
     }
 }
 
 static void verify(void* vptr)
 {
     char *ptr=(void*)vptr;
-    uint32_t *pw=((uint32_t*)ptr)-OFFSET_NWORDS;
+    uint32_t *pw=(uint32_t*)ptr-OFFSET_NWORDS;
     trkdbg(1,0,0,"Verify %p\n", ptr);
     if(*(int*)(ptr-sizeof(int)) == MAGIC3) {
         trkdbg(0,0,0,"Early free detected %p!\n", ptr);
         return;
     }
-    if(pw[OFFSET_MAGIC] != MAGIC1 && pw[OFFSET_MAGIC] != MAGIC2) {
-
-        if(pw[OFFSET_MAGIC]==(MAGIC1+1) || pw[OFFSET_MAGIC]==(MAGIC2+1))
-            trkdbg(0,0,0,"Double free on pointer %p!\n", ptr);
-        else
-            trkdbg(0,0,0,"Invalid pointer %p in free!\n", ptr);
+    if(pw[OFFSET_MAGIC]==(MAGIC1+1) || pw[OFFSET_MAGIC]==(MAGIC2+1)) {
+        trkdbg(0,0,0,"Double free on pointer %p!\n", ptr);
         COREDUMP;
     }
-    /* check the trailer */
-    if(validate) {
+    if(pw[OFFSET_MAGIC] != MAGIC1 && pw[OFFSET_MAGIC] != MAGIC2) {
+        trkdbg(0,0,0,"Invalid pointer %p in free!\n", ptr);
+    }
+    /* check the trailer? */
+    else if(validate) {
 
         if(*((uint32_t*)(ptr+pw[OFFSET_SIZE])) != MAGIC1) {
 
@@ -638,6 +648,7 @@ void free(void *vptr)
     if(!ptr) return; // api should not fail on NULL pointer
     if(ininit) return myfree(vptr);
     else init_lib();
+    trkdbg(0,0,0, "free %p\n", vptr);
     {
         uint32_t *pw=((uint32_t*)ptr)-OFFSET_NWORDS;
         void *ppc;
@@ -649,9 +660,7 @@ void free(void *vptr)
             pw[OFFSET_MAGIC] |= 1;
             return;
         }
-
-        /* remove from list if tracking */
-        if(pw[OFFSET_MAGIC] == MAGIC2) {
+        else if(pw[OFFSET_MAGIC] == MAGIC2) {
 
             trkblk_t *tp=((trkblk_t*)ptr)-1;
             LOCK;
@@ -660,13 +669,20 @@ void free(void *vptr)
                 if((void*)LIST_PREV(tp,list) != (void*)&alist[tp->tag].list) verify(LIST_PREV(tp,list)+1);
             }
             alist[tp->tag].total -= pw[OFFSET_SIZE];
-            curalloc -= pw[OFFSET_SIZE];
             LIST_REMOVE(tp,list);
             UNLOCK;
             nppc=tp_gettrace(tp->freers, MAXFREERS)*4;
             ppc=tp->freers;
         }
-        else curalloc -= pw[OFFSET_SIZE];
+        else if(pw[OFFSET_MAGIC] == MAGIC1) {
+        
+            curalloc -= pw[OFFSET_SIZE];
+        }
+        else {
+            /* we do not know how big is this one - can't poison */
+            realFuncs.realFree(ptr);
+            return;
+        }
         pw[OFFSET_MAGIC] |= 1;
         if(poison) {
 
@@ -685,7 +701,8 @@ void free(void *vptr)
 
         }
         /* to the actual free */
-        init_lib();
+        trkdbg(0,0,0,"realFree(%p) from %p for (%d) %d\n", ptr-pw[OFFSET_OFFSET], ptr, pw[OFFSET_SIZE], pw[OFFSET_SIZE]+pw[OFFSET_OFFSET]);
+        //dump(ptr-pw[OFFSET_OFFSET], pw[OFFSET_SIZE]+pw[OFFSET_OFFSET]+sizeof(uint32_t));
         realFuncs.realFree(ptr-pw[OFFSET_OFFSET]);
     }
 }
@@ -699,44 +716,47 @@ void free(void *vptr)
 */
 void *realloc(void *ptr, size_t size)
 {
-    if(!enable) {
-        init_lib();
-        return realFuncs.realRealloc(ptr, size);
-    } else {
-        if(!ptr) return tp_alloc(size, 0, 0);
-        else if(!size) free(ptr);
-        else {
-            void *new;
+    trkdbg(0,0,0,"realloc - %p!\n", ptr);
+    {
+        if(!ptr) {
+            ptr=malloc(size);
+            trkdbg(5,0,0,"realloc null ptr - returning %p!\n", ptr);
+            return ptr;
+        }
+        if(size) {
             uint32_t *pw=((uint32_t*)ptr)-OFFSET_NWORDS;
+            void *new;
             verify(ptr);
-            if((new=tp_alloc(size, 0, 0))) {
+            if((new=tp_alloc(size, 0))) {
 
                 size_t oldsize=pw[OFFSET_SIZE];
                 size_t ncopy=oldsize>size?size:oldsize;
                 memmove(new, ptr, ncopy);
-                free(ptr);
             }
+            trkdbg(5,0,0,"realloc enabled - returning %p!\n", new);
+            free(ptr);
             return new;
         }
+        free(ptr);
     }
+    trkdbg(5,0,0,"realloc NULL\n");
     return 0;
 }
 
 void *memalign(size_t alignment, size_t size)
 {
-    if(!enable) {
-        init_lib();
-        return realFuncs.realMemalign(alignment, size);
-    }
-    if(alignment < sizeof(int)) return 0;
-    return tp_alloc(size, 0, alignment);
+    void *p=realFuncs.realMemalign(alignment, size);
+    if(p) untracked+=size;
+    return p;
 }
 
 void *valloc(size_t size)
 {
     if(!enable) {
+        void *p;
         init_lib();
-        return realFuncs.realValloc(size);
+        p=realFuncs.realValloc(size);
+        if(p) untracked += size;
     }
     return memalign(pagesize, size);
 }

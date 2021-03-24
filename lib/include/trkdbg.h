@@ -6,10 +6,10 @@
 #include <sys/types.h>
 
 /* socket file used for communication between managed client and manager */
-#define TRACKER_SOCKPATH "/tmp/trkdbg.sock"
+#define TRACKER_SOCKPATH "/var/run/trkdbg.sock"
 
 /* default configuration file path */
-#define TRACKER_CONFFILE "/usr/evo/tracker.conf"
+#define TRACKER_CONFFILE "/etc/tracker.conf"
 
 #define MAXCALLERS  10
 #define MAXFDS      1024
@@ -156,6 +156,7 @@ void    setupCliSocket(void);
 void    shutdownCliSocket(void);
 void    shutdownClientSocket(void);
 void    trkdbg(int level, int doerr, int die, const char *fmt, ...);
+void    trkdbgContinue(int level, const char *fmt, ...);
 int     clientInit(void);
 int     setupSig(void);
 void    dbgsetlvl(int level);

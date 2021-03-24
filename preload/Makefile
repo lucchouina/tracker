@@ -2,7 +2,7 @@ LIB=libtracker.so
 INSTALL_DIR=../install/usr/lib64
 
 OBJS = trkdbglib.o trkclient.o
-LDFLAGS += -ldl -lpthread
+LDFLAGS += -ldl -lpthread -ltrkcommon -L../lib
 CFLAGS += -O0 -I../lib/include -fPIC
 
 ${LIB}: ${OBJS}

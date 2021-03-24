@@ -38,8 +38,6 @@ static void getCmdStr(int idx, int pid)
 {
   char buf[32];
   char prog_name[MAXCNAME];
-#ifdef __linux__
-
     FILE *f;
     char line[100];
     snprintf(buf, sizeof buf, "/proc/%ld/status", (long)pid);
@@ -61,31 +59,6 @@ static void getCmdStr(int idx, int pid)
         } 
         fclose(f);
     }
-#else
-
-    int fd;
-    psinfo_t psbuf;
-    snprintf(buf, sizeof buf, "/proc/%ld/psinfo", (long)pid);
-    if ((fd = open(buf, O_RDONLY)) != -1)
-    {
-        if (read(fd, &psbuf, sizeof(psbuf)) == sizeof(psbuf)) 
-        {
-            char *p=prog_name;
-            snprintf(prog_name, sizeof prog_name, "%s", psbuf.pr_fname);
-            while(*p) {  /* remove the .unwrapped or other extensions */
-                if(*p=='.') { 
-                    *p='\0'; 
-                    break; 
-                } 
-                p++;
-            }
-            close(fd);
-            goto gotit;
-        }
-        close(fd);
-    }
-  
-#endif
 
     snprintf(prog_name, sizeof prog_name, "%s_%d", "unknown", pid);
     
@@ -99,7 +72,6 @@ gotit:
 static int getClientVsize(int idx)
 {
   char buf[32];
-#ifdef __linux__
 
     FILE *f;
     snprintf(buf, sizeof buf, "/proc/%ld/statm", (long)clients[idx].pid);
@@ -111,22 +83,6 @@ static int getClientVsize(int idx)
         } 
         fclose(f);
     }
-#else
-
-    int fd;
-    psinfo_t psbuf;
-    snprintf(buf, sizeof buf, "/proc/%ld/psinfo", (long)clients[idx].pid);
-    if ((fd = open(buf, O_RDONLY)) != -1)
-    {
-        if (read(fd, &psbuf, sizeof(psbuf)) == sizeof(psbuf)) 
-        {
-            close(fd);
-            return psbuf.pr_size;
-        }
-        close(fd);
-    }
-  
-#endif
     return 0;
 }
 

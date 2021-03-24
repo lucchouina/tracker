@@ -183,7 +183,7 @@ struct sigaction action;
 
 static void usage(void)
 {
-    fprintf(stderr, "usage : trkmgr [-d [-d [ ...]] [ -c <confFile>]\n");
+    fprintf(stderr, "usage : trackerd [-d [-d [ ...]] [ -c <confFile>]\n");
     fprintf(stderr, "        -d incremenst debug verbosity\n");
     fprintf(stderr, "        Default <confFile> is %s\n", TRACKER_CONFFILE);
 }

@@ -4,24 +4,25 @@
 #
 usage()
 {
-    echo "usage: trackit [-p] [-b branch] [-B]
+    echo "usage: maketrack [-p dir] [-b branch] [-e script]"
+    echo "    p : pull the source code to directory 'dir'. Default no-pull"
+    echo "    b : branch name to pul. default 'master'"
+    echo "    e : script to execute. default: 'make' && 'make install'"
+    exit 1
 }
-while getopts "pc:" opt; do
+
+branch=master
+
+while getopts "pc:e:" opt; do
   case $opt in
-    i)
-      original=$OPTARG
-      ;;
-    n)
-      nIsos=$OPTARG
-      ;;
-    m)
-      mspecs=($mspecs $OPTARG)
-      ;;
-    u)
-      umod=1
-      ;;
     p)
-      pDir=$OPTARG
+      pull=1
+      ;;
+    b)
+      branch=$OPTARG
+      ;;
+    e)
+      script=$OPTARG
       ;;
     \?)
       echo "Invalid option: -$OPTARG" >&2
@@ -34,3 +35,4 @@ while getopts "pc:" opt; do
   esac
 done
 shift $((OPTIND-1))
+
