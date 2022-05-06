@@ -3,7 +3,7 @@ INSTALL_DIR=../install/usr/lib64
 
 OBJS = trkcommon.o
 LDFLAGS += -rdynamic -ldl -lpthread
-CFLAGS += -O0 -DTRACKER -I../lib/include  -fPIC
+CFLAGS += -DTRACKER -I../lib/include  -fPIC
 
 ${LIB}: ${OBJS}
 	${CC} -shared -o $@ ${OBJS} ${LDFLAGS}

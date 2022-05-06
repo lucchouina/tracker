@@ -36,28 +36,16 @@ static void closeClient(int idx)
 
 static void getCmdStr(int idx, int pid)
 {
-  char buf[32];
-  char prog_name[MAXCNAME];
-    FILE *f;
-    char line[100];
-    snprintf(buf, sizeof buf, "/proc/%ld/status", (long)pid);
-    if((f=fopen(buf, "r"))) {
-    
-        while(fgets(line, sizeof line, f)) {
-        
-            if(strstr(line, "Name:")) {
-                char *tok=strtok(line, "\t \n\r");
-                if(tok) {
-                
-                    if((tok=strtok(NULL, "\t \n\r"))) {
-                        strncpy(prog_name, tok, sizeof prog_name);
-                        fclose(f);
-                        goto gotit;
-                    }
-                }
-            }
-        } 
-        fclose(f);
+    char buf[32];
+    char prog_name[MAXCNAME];
+    char *stdout;;
+    if(trkShell(&stdout, NULL, "cat /proc/%ld/comm", (long)pid)) {
+        if(stdout) {
+            stdout[strlen(stdout)-1]='\0';
+            strncpy(prog_name, stdout, sizeof prog_name-1);
+            free(stdout);
+            goto gotit;
+        }
     }
 
     snprintf(prog_name, sizeof prog_name, "%s_%d", "unknown", pid);

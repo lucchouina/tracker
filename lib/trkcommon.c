@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/syscall.h>
 
 #include "trkdbg.h"
@@ -23,7 +24,12 @@ int sys_select(int nfd, fd_set *r, fd_set *w, fd_set *e, struct timeval *tv)
     return syscall(SYS_select, nfd, r, w, e, tv);
 }
 
-static int dbglvl=0;
+int sys_open(char *name, int mode, int perms)
+{
+    return syscall(SYS_open, name, mode, perms);
+}
+
+static int dbglvl=0, dbgfd=2;
 
 void trkdbg(int level, int doerr, int die, const char *fmt, ...)
 {
@@ -51,7 +57,7 @@ static int pid=-1;
     }
     if(docr || doerr) *p++='\n';
     *p='\0';
-    sys_write(2, msg, p-msg);
+    sys_write(dbgfd, msg, p-msg);
     va_end(ap);
     if(die) exit(1);
 }
@@ -64,16 +70,37 @@ char msg[1024];
     va_start(ap, fmt);
     vsnprintf(msg, sizeof msg-1, fmt, ap);
     msg[sizeof msg -1]='\0';
-    sys_write(2, msg, strlen(msg));
+    sys_write(dbgfd, msg, strlen(msg));
 }
 
 void dbgsetlvl(int level)
 {
+    trkdbg(0,0,0,"Debug level modified from %d to %d\n", dbglvl, level);
     dbglvl=level;
 }
 int dbggetlvl(void)
 {
     return dbglvl;
+}
+
+void setupDbg(void)
+{
+    int fd=open("/var/log/trackerd.log", O_CREAT+O_APPEND+O_RDWR, 0644);
+    if(fd>=0) dbgfd=fd;
+    trkdbg(0,0,0, "trk debug setup to fd %d\n", dbgfd);
+}
+
+void setupClientDbg(void)
+{
+    int fd, pid=getpid();
+    char lfname[100];
+    sys_write(2, "#1\n", 3);
+    snprintf(lfname, sizeof lfname-1, "/var/log/trackerd.client.log");
+    sys_write(2, "#2\n", 3);
+    lfname[sizeof lfname-1]='\0';
+    sys_write(2, "#3\n", 3);
+    if((fd=sys_open(lfname, O_CREAT+O_APPEND+O_RDWR, 0644)) >=0) dbgfd=fd;
+    sys_write(2, "#4\n", 3);
 }
 
 #define CMDLEN  sizeof(cmd_t)
@@ -110,11 +137,11 @@ struct timeval tv={ tv_sec: ACK_TIMEOUT };
     else {
     
         if(!n) {
-            trkdbg(1,1,0,"Timeout waiting for client socket %d", fd);
+            trkdbg(1,1,0,"Timeout waiting for client socket %d\n", fd);
         }
         else {
         
-            trkdbg(1,1,0,"Error select'ing from client socket %d", fd);
+            trkdbg(1,1,0,"Error select'ing from client socket %d\n", fd);
         }
     }
     return val;
@@ -234,3 +261,56 @@ cmd_t pkt;
     trkdbg(1,0,0,"rcvCmd done and error occurred!\n");
     return -1;
 }
+
+
+#define INC 80
+int trkShell(char **output, int *err, const char *fmt, ...)
+{
+    va_list ap;
+    FILE *file;
+    char buf[1000];
+
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf-1, fmt, ap);
+    buf[sizeof buf-1]='\0';
+
+    if(output) {
+        int n, status;
+        int bsize=INC, pos=0;
+        char *p;
+        trkdbg(1, 0, 0, "ShellCmdCommon '%s'\n", buf);
+        if(!(file=popen(buf, "re"))) {
+            trkdbg(0, 1, 0, "popen '%s' failed\n", buf);
+            return 0;
+        }
+        p=malloc(INC);
+        while((n=fread(p+pos, 1, bsize-pos, file)) > 0) {
+            if(pos+n>=bsize) {
+                p=realloc(p, bsize+INC);
+                bsize+=INC;
+            }
+            pos+=n;
+        }
+        if((status=pclose(file))>=0) {
+            trkdbg(1, 0, 0, "Pclose status is 0x%08x\n", status);
+            if(WIFEXITED(status)) {
+                if(!WEXITSTATUS(status)) {
+                    trkdbg(1, 0, 0, "Normal exit 0 from '%s'\n", buf);
+                    *output=p;
+                    (*output)[pos]='\0';
+                    return 1;
+                }
+                else trkdbg(0, 0, 0, "'%s' - exiting with %d\n", buf, WEXITSTATUS(status));
+            }
+            else trkdbg(0, 0, 0, "pclose '%s' - status ix 0x%08x\n", buf, status);
+            if(err) *err=WEXITSTATUS(status);
+        }
+        free(p);
+        return 0;
+    }
+    else {
+        trkdbg(1, 0, 0, "system command '%s'\n", buf);
+        return ! system(buf);
+    }
+}
+

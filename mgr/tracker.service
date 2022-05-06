@@ -11,4 +11,6 @@ Description=Tracker service
 [Service]
 Type=forking
 NotifyAccess=all
+# make sure to enable the tracker preload library 
+ExecStartPre=/usr/bin/tracker enable
 ExecStart=/usr/bin/trackerd

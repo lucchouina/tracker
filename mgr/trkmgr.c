@@ -54,6 +54,16 @@ appdata_t *getAppConfig(char *name)
     return defaultsValid?&defaultAppSettings:&noMatchAppSettings;
 }
 
+void addAppConfig(char *name, int flags)
+{
+    if(nApps<MAXAPPS) {
+        strncpy(apps[nApps].cname, name, sizeof apps[nApps].cname-1);
+        apps[nApps].flags=flags;
+        apps[nApps++].tag=0;
+    }
+    else trkdbg(0,0,0, "Reached max apps %d", MAXAPPS);
+}
+
 static const char *conffile=TRACKER_CONFFILE;
 static void readConf(void)
 {
@@ -150,13 +160,16 @@ static void mgrShutDown(void)
 {
     shutdownClientSocket();
     shutdownCliSocket();
+    exit(0);
 }
 
 // we make our best effort to remove the UNIX domain socket file
 // else the bind() operation will fail for other users
 //
+static int shuttingDown=0;
 static void intHandler(int status)
 {
+    shuttingDown=1;
     mgrShutDown();
 }
 
@@ -195,6 +208,7 @@ int c;
     setSig();
     setupClientSocket();
     setupCliSocket();
+    setupDbg();
 
     // parse command line arguments
     while ((c = getopt(argc, argv, "dc:")) != EOF) {
@@ -239,7 +253,7 @@ int c;
 
             if(errno != EINTR) {
 
-                trkdbg(0,1,1,"Select failed");
+                if(!shuttingDown) trkdbg(0,1,1,"Select failed");
             }
             else {
                 trkdbg(1,0,0,"Select was interupted.\n");

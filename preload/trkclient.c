@@ -84,6 +84,11 @@ int ret=-1;
             ret=alloctag;
             alloctag=aux2;
         break;
+        case CMD_DEBUG:     /* arg : <tag value> */
+            dbgsetlvl(aux2);
+            trkdbg(3,0,0,"Set DEBUG to %d\n", aux2);
+            ret=dbggetlvl();
+        break;
         default:
             // invalide command
             trkdbg(3,0,0,"Invalid set variable %d received\n", aux);

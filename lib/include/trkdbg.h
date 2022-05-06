@@ -6,7 +6,7 @@
 #include <sys/types.h>
 
 /* socket file used for communication between managed client and manager */
-#define TRACKER_SOCKPATH "/var/run/trkdbg.sock"
+#define TRACKER_SOCKPATH "/var/tmp/trkdbg.sock"
 
 /* default configuration file path */
 #define TRACKER_CONFFILE "/etc/tracker.conf"
@@ -44,7 +44,7 @@ typedef enum {
 } resType_t;
 
 void closeCli(int idx);
-int  cliNewCmd(char *cmd, int idx);
+int  cliNewCmd(const char *cmd, int idx);
 int  cliGetchar(int idx);
 void cliPutStr(int idx, const char *s);
 void rl_shutdown(void *rl);
@@ -52,7 +52,7 @@ void *rl_init(int idx);
 void rl_newChar(void *rl);
 
 /* Port for CLI clients */
-#define CLI_PORT 2020
+#define CLI_PORT 12012
 /*
     Enum of possible command exchanged
 */
@@ -66,6 +66,7 @@ enum {
     CMD_POISON,     /* arg: bool on [0|1] */
     CMD_TRACK,      /* arg: bool on [0|1] */
     CMD_TAG,        /* arg : <tag value> */
+    CMD_DEBUG,      /* arg : <debug verbosity level> */
     CMD_REPORT,     /* arg : <tag value> */
     CMD_PUSH,       /* arg : <tag value> */
     CMD_POP,        /* arg : <tag value> */
@@ -161,7 +162,10 @@ int     clientInit(void);
 int     setupSig(void);
 void    dbgsetlvl(int level);
 int     dbggetlvl(void);
+void    setupDbg(void);
+void    setupClientDbg(void);
 appdata_t *getAppConfig(char *name);
+void    addAppConfig(char *name, int flags);
 int     sendCmdMore(int fd, int seq, int cmd, int aux, int aux2, int more, char *pmore, int (*cb)(char **buf));
 int     recvAck(int fd, uint32_t *seq);
 void    sendMgr(int cmd, int aux, int aux2);
@@ -179,5 +183,5 @@ void    cliDecWait(int cidx);
 void    rlShowPrompt(void *rl, int reset);
 
 void buildShowTree(int cliIdx, int clientIdx, int nentries, void **vector, size_t *total);
-
+int trkShell(char **output, int *err, const char *fmt, ...);
 #endif

@@ -73,10 +73,17 @@ uint32_t i;
     va_start(ap, cfmt);
     vsnprintf(p, sizeof p-1, myfmt, ap);
     if(cli[idx].ffd>=0) {
-        
-        write(cli[idx].ffd, p, strlen(p));
+        int l=strlen(p);
+        if(write(cli[idx].ffd, p, l) < l) {
+            trkdbg(0,1,0,"Short write to client %d fd %d ['%s']", idx, cli[idx], p);
+        }
     }
-    else write(cli[idx].fd, p, strlen(p));
+    else {
+        int l=strlen(p);
+        if(write(cli[idx].fd, p, l) < l) {
+            trkdbg(0,1,0,"Short write to client %d fd %d ['%s']", idx, cli[idx], p);
+        }
+    }
     va_end(ap);
     free(fmt);
 }
@@ -141,12 +148,69 @@ static void listCb(int idx, int client, char *name)
 static void cmdList(int idx, int argc, char **argv)
 {
     cliPrt(idx, "   Below is the list of registered application.\n");
-    cliPrt(idx, "   Any of those names can be added to you local scope with   - set scope <name>\n");
+    cliPrt(idx, "   Any of these names can be added to you local scope with   - set scope <name>\n");
     cliPrt(idx, "   You can add all registered application with to your scope - set scope all\n");
     cliPrt(idx, "   -- Start of list --\n");
     trkmgrClientWalkList(idx, listCb);
     cliPrt(idx, "   -- End of list --\n");
 }
+
+static int trkShellToClient(int idx, const char *cmdstr)
+{
+    char *stdout=NULL;
+    int ret;
+
+    ret=trkShell(&stdout, NULL, "bash -c '%s' 2>&1", cmdstr);
+    if(stdout) {
+        int l=strlen(stdout);
+        int pos=0;
+        while(pos<l) {
+            if(stdout[pos]=='\n') stdout[pos]='\0';
+            pos++;
+        }
+        pos=0;
+        while(pos<l) {
+            cliPrt(idx, "%s\n\r", stdout+pos);
+            pos+=strlen(stdout+pos)+1;
+        }
+        free(stdout);
+    }
+    cliPrt(idx, "invalid command '%s'\n\r", cmdstr);
+    return ret;
+}
+
+/* add a PID to the list of tracked processes */
+static void cmdAdd(int idx, int argc, char **argv)
+{
+    int pid=-1;
+    if(argc>1) {
+        pid=atoi(argv[01]);
+        if(pid>0) {
+            char *stdout=NULL;
+
+            /* first see what is the command and add it in case */
+            if(trkShell(&stdout, NULL, "tracker chk %d\n", pid)){
+                if(stdout) {
+                    char cmd[100];
+                    appdata_t *rules;
+                    /* add it */
+                    stdout[strlen(stdout)-1]='\0';
+                    rules=getAppConfig(stdout);
+                    /* no specific rules for it?  Add it*/
+                    if(!rules->cname[0]) {
+                        addAppConfig(stdout, rules->flags?rules->flags:FLAG_ENABLE+FLAG_POISON+FLAG_VALIDATE+FLAG_TRACK);
+                    }
+                    snprintf(cmd, sizeof cmd-1, "tracker add %d\n", pid); 
+                    trkShellToClient(idx, (const char *) cmd);
+                    free(stdout);
+                }
+            }
+            else cliPrt(idx, "Could not find pid '%s'\n", argv[1]);            
+        }
+        else cliPrt(idx, "invalid pid '%s'\n", argv[1]);        
+    } else cliPrt(idx, "usage: add <pid>\n");  
+}
+
 static int onoff2val(int idx, char *valstr)
 {
     if(!strcasecmp(valstr, "on")) return 1;
@@ -296,6 +360,8 @@ static void cmdSet(int idx, int argc, char **argv)
         cliPrt(idx, "        buffers with invalid and misaligned addresses for easier detection of use-after-free (MEDIUM LOAD)\n");
         cliPrt(idx, "     tag      <int value>\n");
         cliPrt(idx, "        Change the tag value associated with each allocations. Only used when 'tracking' is enabled\n");
+        cliPrt(idx, "     debug <debug Level>\n");
+        cliPrt(idx, "        Set debug verbosity level to 'debug level'.\n");
         cliPrt(idx, "     scope    <name1>[ <name2> [ name3]]\n");
         cliPrt(idx, "        Set the list of applications to which the following command will apply. The application names\n");
         cliPrt(idx, "        can be selected from the output of the 'list' command. But a name of an application that as yet\n");
@@ -327,6 +393,14 @@ static void cmdSet(int idx, int argc, char **argv)
         if(argc < 3) getAppVar(idx, "poison", CMD_POISON);
         else if((val=onoff2val(idx, argv[2]))>=0){
             setAppVar(idx, "poison", CMD_POISON, val);
+        }
+    }
+    else if(!strcmp(argv[1], "debug")) {
+        int val;
+        if(argc < 3) getAppVar(idx, "debug", CMD_DEBUG);
+        else if((val=atoi(argv[2]))>=0){
+            setAppVar(idx, "debug", CMD_DEBUG, val);
+            dbgsetlvl(val);
         }
     }
     else if(!strcmp(argv[1], "tag")) {
@@ -387,6 +461,7 @@ static clicmd_t cmds[]={
 
     { "help",   "Display the list of available commands.", cmdHelp, 0},                                                    
     { "list",   "List all of the registered application names.", cmdList , 0},                                             
+    { "add",    "Register process PID. ex: add 1234", cmdAdd , 0},                                             
     { "pop",    "Decrement the current allocation tag.", cmdPop, 0},         
     { "push",   "Increment the current allocation tag.", cmdPush, 0},         
     { "snap",   "Take a snapshot of all allocations call stack for later compare.", cmdSnap, 0},         
@@ -419,8 +494,9 @@ static clicmd_t *getCmd(char *name)
 }
 
 /* client to server exchanges */
-int cliNewCmd(char *cmdstr, int idx)
+int cliNewCmd(const char *cmdstr, int idx)
 {
+int ret=0;
 char *argv[10];
 uint32_t argc=0;
 char *tok, *last;
@@ -436,21 +512,23 @@ clicmd_t *cmd;
     }
     
     /* return on empty line */
-    if(!argc) return 1;
-    
-    if(!(cmd=getCmd(argv[0]))) {
-    
-        cliPrt(idx, "Command not found '%s'\n", argv[0]);
-        return 1;
-    }
+    if(!argc) ret=1;
     else {
-    
-        trkdbg(1,0,0,"Before execution of cmd '%s'\n", argv[0]);
-        (*cmd->func)(idx, argc, argv);
-        trkdbg(1,0,0,"After execution of cmd '%s'\n", argv[0]);
-        if(!cli[idx].waiting) return 1;
+        if(!(cmd=getCmd(argv[0]))) {
+
+            trkShellToClient(idx, cmdstr);
+            ret=1;
+        }
+        else {
+
+            trkdbg(1,0,0,"Before execution of cmd '%s'\n", argv[0]);
+            (*cmd->func)(idx, argc, argv);
+            trkdbg(1,0,0,"After execution of cmd '%s'\n", argv[0]);
+            if(!cli[idx].waiting) ret=1;
+        }
     }
-    return 0;
+    free(local);
+    return ret;
 }
 
 /*
@@ -491,7 +569,10 @@ int cliGetchar(int idx)
 
 void cliPutStr(int idx, const char *s)
 {
-    write(cli[idx].fd, s, strlen(s));
+    int l=strlen(s);
+    if(cli[idx].fd >=0 && write(cli[idx].fd, s, l) < l) {
+        trkdbg(0,1,0,"Short write to client %d fd %d '%s'", idx, cli[idx].fd, s);
+    }
 }
 
 static int cliFd=(-1);

@@ -1,29 +1,7 @@
 /*
 
-    This file contains a simple set of library overloads that will
-    work with the memory tracking framework to supply information
-    on how much memory is allocated and where as well as execite
-    configuration commands from the framework or user.
-    
-     #include <stdlib.h>
+    Track resources.
 
-     void *malloc(size_t size);
-
-     void *calloc(size_t nelem, size_t elsize);
-
-     void free(void *ptr);
-
-     void *memalign(size_t alignment, size_t size);
-
-     void *realloc(void *ptr, size_t size);
-
-     void *valloc(size_t size);
-
-     #include <alloca.h>
-
-     void *alloca(size_t size);
-     
-     - Luc
 */
 #define UNW_LOCAL_ONLY
 #define FASTFRAMES
@@ -42,11 +20,13 @@
 #include <stdarg.h>
 #include <malloc.h>
 #include <sys/socket.h>
-
 #include <unwind.h>
-
-#define __USE_GNU
 #include <dlfcn.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include "trkdbg.h"
 #include "trklist.h"
@@ -62,6 +42,8 @@ static uint32_t pagesize, curalloc=0, untracked=0, initted=0, ininit=0;
 static pthread_mutex_t trkm=PTHREAD_MUTEX_INITIALIZER;
 #define LOCK    (pthread_mutex_lock(&trkm))
 #define UNLOCK  (pthread_mutex_unlock(&trkm))
+
+static void init_lib(void) __attribute__((constructor));
 
 typedef void *type_malloc(size_t size);
 typedef void *type_calloc(size_t nelem, size_t elsize);
@@ -81,14 +63,21 @@ typedef int type_pipe(int filedes[2]);
 typedef int type_socket(int domain, int type, int protocol);
 typedef int type_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 
-typedef int type_fork(void);
+typedef void *type_smap_alloc(void *smh, size_t size);
+typedef void type_smap_free(void *smh, void *ptr);
 
-#define MAGIC1 0x1badc0de
+typedef int type_fork(void);
+typedef int type_smap_shared_db_add (void *smh, const uint64_t& guid, const uint64_t& olc, uint8_t *data, uint32_t& dlen);
+
+#define MAGIC1 0x1badc0d0
 #define MAGIC2 0x10defee0
-#define MAGIC3 0x1feeddad
+#define MAGIC3 0x1feedda0
+#define MAGIC4 0x1badbee0
 #define mkbusy(m) (m|=1)
 #define mkfree(m) (m&=~1)
 #define isbusy(m) (m|1)
+
+#define sfname(f) (#f)
 
 #if __SIZEOF_POINTER__ == 4
     typedef uint32_t ptype;
@@ -132,24 +121,28 @@ struct trkblk_s {
 
 struct {
 
-    type_malloc     *realMalloc;
-    type_realloc    *realRealloc;
-    type_calloc     *realCalloc;
-    type_free       *realFree;
-    type_memalign   *realMemalign;
-    type_valloc     *realValloc;
+    type_malloc     *malloc;
+    type_realloc    *realloc;
+    type_calloc     *calloc;
+    type_free       *free;
+    type_memalign   *memalign;
+    type_valloc     *valloc;
     
-    type_dup        *realDup;
-    type_dup2       *realDup2;
-    type_open       *realOpen;
-    type_openat     *realOpenat;
-    type_creat      *realCreat;
-    type_close      *realClose;
-    type_pipe       *realPipe;
-    type_socket     *realSocket;
-    type_accept     *realAccept;
+    type_dup        *dup;
+    type_dup2       *dup2;
+    type_open       *open;
+    type_openat     *openat;
+    type_creat      *creat;
+    type_close      *close;
+    type_pipe       *pipe;
+    type_socket     *socket;
+    type_accept     *accept;
     
-    type_fork       *realFork;
+    type_smap_alloc *smap_alloc;
+    type_smap_free  *smap_free;
+
+    type_fork       *fork;
+    type_smap_shared_db_add *smap_shared_db_add;
 
 } realFuncs;
 
@@ -157,14 +150,19 @@ struct {
 static void dump(void *p, int n)
 {
 #define NC 8
-uint32_t *pi=(typeof(pi))p;
-int nw=n/sizeof(*pi), i;
-    trkdbg(0,0,0, "Dumping %d words @ %p\n", nw, p);
-    for(i=0;i<nw;i++,pi++) {
-        if(!(i%NC)) trkdbgContinue(0, "\n    %p", pi);
-        trkdbgContinue(0, " %08x", *pi);
+
+    if(dbggetlvl() < 3) return;
+    else {
+        uint32_t *pi=(typeof(pi))p;
+        int nw=n/sizeof(*pi), i;
+
+        trkdbg(0,0,0, "Dumping %d words @ %p\n", nw, p);
+        for(i=0;i<nw;i++,pi++) {
+            if(!(i%NC)) trkdbgContinue(0, "\n    %p", pi);
+            trkdbgContinue(0, " %08x", *pi);
+        }
+        trkdbgContinue(0, "\n");
     }
-    trkdbgContinue(0, "\n");
 }
 
 static int countFds(int tag);
@@ -199,12 +197,13 @@ int segid;
         segsize=total*RPTSLOTSIZE;
         segsize += sizeof(int);
         trkdbg(1,0,0,"Seg size for report is %u\n", segsize);
+        shmctl(KEYBASE+getpid(), IPC_RMID, 0); /* in case a segment is left behind */
         if((segid=shmget(KEYBASE+getpid(), segsize, IPC_CREAT+0666)) < 0)
             trkdbg(0,1,0,"Could not open shared memory segment.\n");
         else {
             char *pslot, *mapaddr;
             trkdbg(1,0,0,"Attaching to segment ID %d\n", segid);
-            if((pslot=mapaddr=shmat(segid, 0, 0))==(void*)-1) {
+            if((pslot=mapaddr=(char*)shmat(segid, 0, 0))==(void*)-1) {
                 trkdbg(0,1,0,"Could not attach to shared memory segment [ size=%d pslot=%p  errno : %d].\n"
                         , segsize, segid, errno);
                 shmctl(segid, IPC_RMID, 0);
@@ -263,7 +262,7 @@ static __inline__ int enabled(void)
 }
 
 /************************** early init recursivity sheild ***********************/
-#define MYBUFSIZE 1024
+#define MYBUFSIZE (100*1024)
 static char mybuf[MYBUFSIZE];
 static int mypos = 0;
 
@@ -292,113 +291,16 @@ void *ptr=mymalloc(nelem*elsize);
 static void myfree(void *ptr)
 {
     if(*(int*)(((char*)ptr)-sizeof(int)) != MAGIC3) {
-        trkdbg(0,0,0,"Early free of invalid pointer\n");
-        COREDUMP;
+        if(realFuncs.free) realFuncs.free(ptr);
+        else {
+            trkdbg(0,0,0,"Early free of invalid pointer\n");
+            COREDUMP;
+        }
     }
     /* we do nothing else then validate */
 }
-
 /********************************************************************************/
 
-/* make the dyn lynker call trkdbginit() right after the load */
-static void init_lib(void) __attribute__((constructor));
-static void init_lib(void) {
-char *dbgvalstr;
-int dbgval;
-int missing=0;
-
-
-    if(initted || ininit) {
-        return;
-    }
-    ininit=1;
-    /*
-        Make a list fo the real symbols.
-        fatal is any of the symbols are not resolved.
-    */
-    if((dbgvalstr=getenv("TRKDEBUG"))) {
-        if((dbgval=atoi(dbgvalstr))>=0) dbgsetlvl(dbgval);
-        else trkdbg(0,0,0,"Invalid debug level value past in environment [%s]\n", dbgvalstr);
-    }
-    
-    trkdbg(3,0,0,"trkdbginit : start\n");
-    if(dlsym(RTLD_NEXT, "si_socket_api_init")) {
-        ((void (*)(void)) dlsym(RTLD_NEXT, "si_socket_api_init"))();
-    }
-    if(!(
-        (realFuncs.realMalloc    = (type_malloc*)    dlsym(RTLD_NEXT, "malloc"))
-        && ++missing &&
-        (realFuncs.realCalloc    = (type_calloc*)    dlsym(RTLD_NEXT, "calloc"))
-        && ++missing &&
-        (realFuncs.realRealloc   = (type_realloc*)   dlsym(RTLD_NEXT, "realloc"))
-        && ++missing &&
-        (realFuncs.realFree      = (type_free*)      dlsym(RTLD_NEXT, "free"))
-        && ++missing &&
-        (realFuncs.realMemalign  = (type_memalign*)  dlsym(RTLD_NEXT, "memalign"))
-        && ++missing &&
-        (realFuncs.realValloc    = (type_valloc*)    dlsym(RTLD_NEXT, "valloc"))
-        && ++missing &&
-        (realFuncs.realDup       = (type_dup*)       dlsym(RTLD_NEXT, "dup"))
-        && ++missing &&
-        (realFuncs.realDup2      = (type_dup2*)      dlsym(RTLD_NEXT, "dup2"))
-        && ++missing &&
-        (realFuncs.realOpen      = (type_open*)      dlsym(RTLD_NEXT, "open"))
-        && ++missing &&
-#if 0
-        (realFuncs.realOpenat    = (type_openat*)    dlsym(RTLD_NEXT, "openat"))
-        && ++missing &&
-#endif
-        (realFuncs.realCreat     = (type_creat*)     dlsym(RTLD_NEXT, "creat"))
-        && ++missing &&
-        (realFuncs.realClose     = (type_close*)     dlsym(RTLD_NEXT, "close"))
-        && ++missing &&
-        (realFuncs.realPipe      = (type_pipe*)      dlsym(RTLD_NEXT, "pipe"))
-        && ++missing &&
-        (realFuncs.realSocket    = (type_socket*)    dlsym(RTLD_NEXT, "socket"))
-        && ++missing &&
-        (realFuncs.realAccept    = (type_accept*)    dlsym(RTLD_NEXT, "accept"))
-        && ++missing &&
-        (realFuncs.realFork      = (type_fork*)    dlsym(RTLD_NEXT, "fork"))
-
-    )) trkdbg(0,0,1,"Could not resolve some of the overloaded functions missing=%d!\n", missing);
-    
-    trkdbg(3,0,0,"realMalloc=0x%08x\n", realFuncs.realMalloc);
-    trkdbg(3,0,0,"realCalloc=0x%08x\n", realFuncs.realCalloc);
-    trkdbg(3,0,0,"realRealloc=0x%08x\n", realFuncs.realRealloc);
-    trkdbg(3,0,0,"realFree=0x%08x\n", realFuncs.realFree);
-    trkdbg(3,0,0,"realMemalign=0x%08x\n", realFuncs.realMemalign);
-    trkdbg(3,0,0,"realValloc=0x%08x\n", realFuncs.realValloc);
-    trkdbg(3,0,0,"realDup=0x%08x\n", realFuncs.realDup);
-    trkdbg(3,0,0,"realOpen=0x%08x\n", realFuncs.realOpen);
-    trkdbg(3,0,0,"realCreat=0x%08x\n", realFuncs.realCreat);
-    trkdbg(3,0,0,"realClose=0x%08x\n", realFuncs.realClose);
-    trkdbg(3,0,0,"realPipe=0x%08x\n", realFuncs.realPipe);
-    trkdbg(3,0,0,"realSocket=0x%08x\n", realFuncs.realSocket);
-    trkdbg(3,0,0,"realAccept=0x%08x\n", realFuncs.realAccept);
-    trkdbg(3,0,0,"realFork=0x%08x\n", realFuncs.realFork);
-
-    // need this for handling valloc()
-    pagesize=sysconf(_SC_PAGESIZE);
-    trkdbg(3,0,0,"trkdbginit : page size is %d\n", pagesize);
-    /*
-        Open the connection to the management socket.
-        If the manager is not listeing - forget it.
-        So - not fatal, continue with '!enable'.
-    */
-    trkdbg(3,0,0,"trkdbginit : client setup.\n", pagesize);
-    if(!clientInit()) enable=0;
-    
-    // Initialize the lists
-    {
-        int i;
-        for(i=0;i<MAXTAGS;i++)
-            LIST_INIT(&alist[i].list);
-    }
-    trkdbg(3,0,0,"trkdbginit : done enable=%d tracking=%d\n", enable, tracking);
-    initted++;
-    ininit=0;
-    
-}
 
 #define JUMPOVER    1  // number of frame to jump over before starting to record a backtrace
 
@@ -536,27 +438,29 @@ static __inline__ uint32_t chkblock(void *ptr)
     - trim up the size to the nearest int32_t
     - check if we've been turned on.
 */
-static void *tp_alloc(size_t size, int zeroize)
+
+static void *tp_alloc(size_t size, void* (*cb)(size_t, void*), void *data)
 {
     trkblk_t *tp;
     size_t tpsize;
     uint32_t overhead;
     char *p;
     
-    trkdbg(0,0,0,"tp_alloc: size=%d (aligned size %d) zeroize=%d\n", size, trkAlign(size), zeroize);
+    trkdbg(0,0,0,"tp_alloc: size=%d (aligned size %d)\n", size, trkAlign(size));
     size=trkAlign(size);
     if(tracking) overhead=sizeof *tp;
     else overhead=(OFFSET_NWORDS) * sizeof(uint32_t);
 
     tpsize=overhead+size;
-    trkdbg(0,0,0,"Tpsize=%d overhead=%d tracking=%d\n", tpsize, overhead, tracking);
-    if(zeroize) p=realFuncs.realCalloc(1, tpsize+sizeof(uint32_t));
-    else p=realFuncs.realMalloc(tpsize+sizeof(uint32_t));
+    trkdbg(0,0,0,"Tpsize=%d overhead=%d tracking=%d cb=%p\n", tpsize, overhead, tracking, cb);
+    p=(char*)cb(tpsize+sizeof(uint32_t), data);
+    trkdbg(0,0,0,"real.malloc(%p to %p for %d bytes)\n", p, p+tpsize+sizeof(uint32_t), tpsize+sizeof(uint32_t));
     if(p) {
         // figure out where to put tp and our offset
         char *ph=(char*)(((size_t)p+overhead));
-        trkdbg(0,0,0,"p=%p ph=%p, delta=%d\n", p, ph, ph-p); 
+        trkdbg(0,0,0,"malloc - p=%p ph=%p, delta=%d\n", p, ph, ph-p); 
         curalloc += size;
+        trkdbg(0,0,0,"setting *(int32*)(%p+%d) [%p] to %08x\n", p, tpsize, p+tpsize, MAGIC1);
         *(((int*)(p+tpsize)))=MAGIC1;
         if(tracking) {
         
@@ -581,7 +485,7 @@ static void *tp_alloc(size_t size, int zeroize)
         else {
         
             uint32_t *pw=(uint32_t *)ph-OFFSET_NWORDS;
-            pw[OFFSET_MAGIC]=MAGIC1;  // header
+            pw[OFFSET_MAGIC]=MAGIC4;  // header
             pw[OFFSET_SIZE]=size;
             pw[OFFSET_OFFSET]=ph-(char*)p;
             trkdbg(0,0,0,"Tagged return %p curalloc=%d\n", ph, curalloc);
@@ -593,31 +497,44 @@ static void *tp_alloc(size_t size, int zeroize)
     
 }
 
+static void *malloc_cb(size_t size, void *data)
+{
+    return realFuncs.malloc(size);
+}
+
 void *malloc(size_t size)
 {
     void *ptr;
     if(ininit) return mymalloc(size);
     else init_lib();
-    ptr=tp_alloc(size, 0);
-    trkdbg(0,0,0,"malloc - returning %p\n", ptr);
+    if(enable) {
+        ptr=tp_alloc(size,  malloc_cb, NULL);
+        trkdbg(0,0,0,"malloc - returning %p\n", ptr);
+    } else ptr=realFuncs.malloc(size);
     return ptr;
+}
+
+static void *calloc_cb(size_t size, void *data)
+{
+    return realFuncs.calloc(size, 1);
 }
 
 void *calloc(size_t nelem, size_t elsize)
 {
     if(ininit) return mycalloc(nelem, elsize);
-    else {
+    init_lib();
+    if(enable) {
         void *ptr;
-        init_lib();
-        ptr=tp_alloc(nelem*elsize, 1);
+        ptr=tp_alloc(nelem*elsize, calloc_cb, NULL);
         trkdbg(0,0,0,"cmalloc - returning %p\n", ptr);
         return ptr;
     }
+    return realFuncs.calloc(nelem, elsize);
 }
 
 static void verify(void* vptr)
 {
-    char *ptr=(void*)vptr;
+    char *ptr=(char*)vptr;
     uint32_t *pw=(uint32_t*)ptr-OFFSET_NWORDS;
     trkdbg(1,0,0,"Verify %p\n", ptr);
     if(*(int*)(ptr-sizeof(int)) == MAGIC3) {
@@ -629,11 +546,11 @@ static void verify(void* vptr)
         COREDUMP;
     }
     if(pw[OFFSET_MAGIC] != MAGIC1 && pw[OFFSET_MAGIC] != MAGIC2) {
-        trkdbg(0,0,0,"Invalid pointer %p in free!\n", ptr);
+        trkdbg(0,0,0,"Foreign pointer %p in free [0x%08x]!\n", ptr, pw[OFFSET_MAGIC]);
     }
     /* check the trailer? */
     else if(validate) {
-
+        trkdbg(0,0,0,"Testing trailer at %p+%d (%p) for value 0x%08x\n", ptr, pw[OFFSET_SIZE], ptr+pw[OFFSET_SIZE], MAGIC1);
         if(*((uint32_t*)(ptr+pw[OFFSET_SIZE])) != MAGIC1) {
 
             trkdbg(0,0,0,"Buffer overflow defected! Aborting...\n");
@@ -642,23 +559,22 @@ static void verify(void* vptr)
     }
 }            
 
-void free(void *vptr)
+static void *tp_free(void *vptr)
 {
     char *ptr=(char*)vptr;
-    if(!ptr) return; // api should not fail on NULL pointer
-    if(ininit) return myfree(vptr);
-    else init_lib();
-    trkdbg(0,0,0, "free %p\n", vptr);
-    {
+    if(!ptr) return NULL; // api should not fail on NULL pointer
+    init_lib();
+    if(enable) {
         uint32_t *pw=((uint32_t*)ptr)-OFFSET_NWORDS;
         void *ppc;
         int nppc=0;
 
+        trkdbg(0,0,0, "free %p\n", vptr);
         verify(ptr);
         if(pw[OFFSET_MAGIC] == MAGIC3) {
             myfree(vptr);
             pw[OFFSET_MAGIC] |= 1;
-            return;
+            return NULL;
         }
         else if(pw[OFFSET_MAGIC] == MAGIC2) {
 
@@ -674,14 +590,13 @@ void free(void *vptr)
             nppc=tp_gettrace(tp->freers, MAXFREERS)*4;
             ppc=tp->freers;
         }
-        else if(pw[OFFSET_MAGIC] == MAGIC1) {
+        else if(pw[OFFSET_MAGIC] == MAGIC4) {
         
             curalloc -= pw[OFFSET_SIZE];
         }
         else {
             /* we do not know how big is this one - can't poison */
-            realFuncs.realFree(ptr);
-            return;
+            return ptr;
         }
         pw[OFFSET_MAGIC] |= 1;
         if(poison) {
@@ -701,10 +616,16 @@ void free(void *vptr)
 
         }
         /* to the actual free */
-        trkdbg(0,0,0,"realFree(%p) from %p for (%d) %d\n", ptr-pw[OFFSET_OFFSET], ptr, pw[OFFSET_SIZE], pw[OFFSET_SIZE]+pw[OFFSET_OFFSET]);
-        //dump(ptr-pw[OFFSET_OFFSET], pw[OFFSET_SIZE]+pw[OFFSET_OFFSET]+sizeof(uint32_t));
-        realFuncs.realFree(ptr-pw[OFFSET_OFFSET]);
+        trkdbg(0,0,0,"realfree(%p) from %p for (%d) %d\n", ptr-pw[OFFSET_OFFSET], ptr, pw[OFFSET_SIZE], pw[OFFSET_SIZE]+pw[OFFSET_OFFSET]);
+        return ptr-pw[OFFSET_OFFSET];
     }
+    else myfree(ptr);
+    return NULL;
+}
+
+void free(void *ptr)
+{
+    if((ptr=tp_free(ptr))) realFuncs.free(ptr);
 }
 
 /*
@@ -714,38 +635,44 @@ void free(void *vptr)
     in the header in the first place.
     
 */
-void *realloc(void *ptr, size_t size)
+void *tp_realloc(void *ptr, size_t size, void* (*cb)(size_t, void*), void *data)
 {
-    trkdbg(0,0,0,"realloc - %p!\n", ptr);
-    {
+    if(enable) {
+        trkdbg(0,0,0,"realloc - %p!\n", ptr);
         if(!ptr) {
-            ptr=malloc(size);
+            ptr=tp_alloc(size, cb, data);
             trkdbg(5,0,0,"realloc null ptr - returning %p!\n", ptr);
             return ptr;
         }
         if(size) {
             uint32_t *pw=((uint32_t*)ptr)-OFFSET_NWORDS;
-            void *new;
+            void *newa;
             verify(ptr);
-            if((new=tp_alloc(size, 0))) {
+            if((newa=tp_alloc(size, cb, data))) {
 
                 size_t oldsize=pw[OFFSET_SIZE];
                 size_t ncopy=oldsize>size?size:oldsize;
-                memmove(new, ptr, ncopy);
+                trkdbg(5,0,0,"realloc moving %d bytes of %d byte from %p to %p\n", ncopy, oldsize, ptr, newa);
+                memmove(newa, ptr, ncopy);
             }
-            trkdbg(5,0,0,"realloc enabled - returning %p!\n", new);
+            trkdbg(5,0,0,"realloc enabled - returning %p!\n", newa);
             free(ptr);
-            return new;
+            return newa;
         }
         free(ptr);
     }
     trkdbg(5,0,0,"realloc NULL\n");
-    return 0;
+    return realFuncs.realloc(ptr, size);
+}
+
+void *realloc(void *ptr, size_t size)
+{
+    return tp_realloc(ptr, size, malloc_cb, NULL);
 }
 
 void *memalign(size_t alignment, size_t size)
 {
-    void *p=realFuncs.realMemalign(alignment, size);
+    void *p=realFuncs.memalign(alignment, size);
     if(p) untracked+=size;
     return p;
 }
@@ -755,7 +682,7 @@ void *valloc(size_t size)
     if(!enable) {
         void *p;
         init_lib();
-        p=realFuncs.realValloc(size);
+        p=realFuncs.valloc(size);
         if(p) untracked += size;
     }
     return memalign(pagesize, size);
@@ -820,7 +747,7 @@ static void newFd(int fd)
 static int closeFd(int fd)
 {
 int ret;
-    ret=realFuncs.realClose(fd);
+    ret=realFuncs.close(fd);
     init_lib();
     if(!enable) return ret;
     if(!ret && fdIsValid(fd)) {
@@ -838,13 +765,13 @@ int ret;
 int dup(int oldfd)
 {
     init_lib();
-    return realFuncs.realDup(oldfd);
+    return realFuncs.dup(oldfd);
 }
 
 int dup2(int oldfd, int newfd)
 {
     init_lib();
-    return realFuncs.realDup2(oldfd, newfd);
+    return realFuncs.dup2(oldfd, newfd);
 }
 
 int open(const char *pathname, int flags, ...)
@@ -854,7 +781,7 @@ int fd;
 
     init_lib();
     va_start(ap, flags);
-    fd=realFuncs.realOpen(pathname, flags, va_arg(ap, int));
+    fd=realFuncs.open(pathname, flags, va_arg(ap, int));
     va_end(ap);
     newFd(fd);
 
@@ -868,7 +795,7 @@ int fd;
 
     init_lib();
     va_start(ap, flags);
-    fd=realFuncs.realOpenat(dirfd, pathname, flags, va_arg(ap, int));
+    fd=realFuncs.openat(dirfd, pathname, flags, va_arg(ap, int));
     va_end(ap);
     newFd(fd);
     return fd;
@@ -879,7 +806,7 @@ int creat(const char *pathname, mode_t mode)
 int fd;
 
     init_lib();
-    fd=realFuncs.realCreat(pathname, mode);
+    fd=realFuncs.creat(pathname, mode);
     newFd(fd);
     return fd;
 }
@@ -895,7 +822,7 @@ int pipe(int *filedes)
 int ret;
 
     init_lib();
-    ret=realFuncs.realPipe(filedes);
+    ret=realFuncs.pipe(filedes);
     if(!ret) {
         newFd(filedes[0]);
         newFd(filedes[1]);
@@ -909,7 +836,7 @@ int fd;
 
     /* recursion during client init phase */
     if(!ininit) init_lib();
-    fd=realFuncs.realSocket(domain, type, protocol);
+    fd=realFuncs.socket(domain, type, protocol);
     newFd(fd);
     return fd;
 }
@@ -919,7 +846,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
 int fd;
 
     init_lib();
-    fd=realFuncs.realAccept(sockfd, addr, addrlen);
+    fd=realFuncs.accept(sockfd, addr, addrlen);
     newFd(fd);
     return fd;
 }
@@ -929,10 +856,141 @@ pid_t fork(void)
 int pid;
 
     init_lib();
-    if((pid=realFuncs.realFork()) == 0) {
+    if((pid=realFuncs.fork()) == 0) {
     
         /* if that worked, then lets close and re-register with mgr */
         if(enable) clientInit();
     }
     return pid;
 }
+#ifdef __cplusplus
+}
+#endif
+
+#define cplusfname(f) (#f)
+
+static void *smap_alloc_cb(size_t size, void *data)
+{
+    return realFuncs.smap_alloc(data, size);
+}
+
+void *smap_alloc(void *smh, size_t size)
+{
+    void *ptr=NULL;
+    init_lib();
+    if(enable) {
+        ptr=tp_alloc(size, smap_alloc_cb, smh);
+        trkdbg(0,0,0,"smap_malloc - returning %p\n", ptr);
+    }
+    return ptr;
+
+}
+
+void smap_free(void *smh, void *ptr)
+{
+    if((ptr=tp_free(ptr))) realFuncs.smap_free(smh, ptr);
+}
+
+void *smap_realloc(void *smh, void *ptr, size_t sz)
+{
+    return tp_realloc(ptr, sz, smap_alloc_cb, smh);
+}
+
+
+void cplusInit(void)
+{
+    realFuncs.smap_alloc   = (type_smap_alloc*)    dlsym(RTLD_NEXT, cplusfname(smap_alloc));
+    realFuncs.smap_free   = (type_smap_free*)    dlsym(RTLD_NEXT, cplusfname(smap_free));
+}
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+/* make the dyn lynker call trkdbginit() right after the load */
+static void init_lib(void) {
+char *dbgvalstr;
+int dbgval;
+int missing=0;
+
+
+    if(initted || ininit) {
+        return;
+    }
+    ininit=1;
+    /*
+        Make a list fo the real symbols.
+        fatal is any of the symbols are not resolved.
+    */
+    setupClientDbg();
+    if((dbgvalstr=getenv("TRKDEBUG"))) {
+        if((dbgval=atoi(dbgvalstr))>=0) dbgsetlvl(dbgval);
+        else {
+            trkdbg(0,0,0,"Invalid debug level value past in environment [%s]\n", dbgvalstr);
+        }
+    }
+    
+    trkdbg(3,0,0,"trkdbginit : start\n");
+    if(dlsym(RTLD_NEXT, "si_socket_api_init")) {
+        ((void (*)(void)) dlsym(RTLD_NEXT, "si_socket_api_init"))();
+    }
+    realFuncs.malloc    = (type_malloc*)    dlsym(RTLD_NEXT, sfname(malloc));
+    realFuncs.calloc    = (type_calloc*)    dlsym(RTLD_NEXT, sfname(calloc));
+    realFuncs.realloc   = (type_realloc*)   dlsym(RTLD_NEXT, sfname(realloc));
+    realFuncs.free      = (type_free*)      dlsym(RTLD_NEXT, sfname(free));
+    realFuncs.memalign  = (type_memalign*)  dlsym(RTLD_NEXT, sfname(memalign));
+    realFuncs.valloc    = (type_valloc*)    dlsym(RTLD_NEXT, sfname(valloc));
+    realFuncs.dup       = (type_dup*)       dlsym(RTLD_NEXT, sfname(dup));
+    realFuncs.dup2      = (type_dup2*)      dlsym(RTLD_NEXT, sfname(dup2));
+    realFuncs.open      = (type_open*)      dlsym(RTLD_NEXT, sfname(open));
+#if 0
+    realFuncs.openat    = (type_openat*)    dlsym(RTLD_NEXT, sfname(openat));
+#endif
+    realFuncs.creat     = (type_creat*)     dlsym(RTLD_NEXT, sfname(creat));
+    realFuncs.close     = (type_close*)     dlsym(RTLD_NEXT, sfname(close));
+    realFuncs.pipe      = (type_pipe*)      dlsym(RTLD_NEXT, sfname(pipe));
+    realFuncs.socket    = (type_socket*)    dlsym(RTLD_NEXT, sfname(socket));
+    realFuncs.accept    = (type_accept*)    dlsym(RTLD_NEXT, sfname(accept));
+    realFuncs.fork      = (type_fork*)    dlsym(RTLD_NEXT, sfname(fork));
+    cplusInit();
+    
+    trkdbg(0,0,0,"real %s=0x%08x\n", sfname(malloc), realFuncs.malloc);
+    trkdbg(0,0,0,"real %s=0x%08x\n", sfname(calloc), realFuncs.calloc);
+    trkdbg(0,0,0,"real realloc=0x%08x\n", realFuncs.realloc);
+    trkdbg(0,0,0,"real free=0x%08x\n", realFuncs.free);
+    trkdbg(0,0,0,"real memalign=0x%08x\n", realFuncs.memalign);
+    trkdbg(0,0,0,"real valloc=0x%08x\n", realFuncs.valloc);
+    trkdbg(0,0,0,"real dup=0x%08x\n", realFuncs.dup);
+    trkdbg(0,0,0,"real open=0x%08x\n", realFuncs.open);
+    trkdbg(0,0,0,"real creat=0x%08x\n", realFuncs.creat);
+    trkdbg(0,0,0,"real close=0x%08x\n", realFuncs.close);
+    trkdbg(0,0,0,"real pipe=0x%08x\n", realFuncs.pipe);
+    trkdbg(0,0,0,"real socket=0x%08x\n", realFuncs.socket);
+    trkdbg(0,0,0,"real accept=0x%08x\n", realFuncs.accept);
+    trkdbg(0,0,0,"real fork=0x%08x\n", realFuncs.fork);
+    trkdbg(0,0,0,"real %s=0x%08x\n", cplusfname(smap_shared_db_add), realFuncs.smap_shared_db_add);
+
+    // need this for handling valloc()
+    pagesize=sysconf(_SC_PAGESIZE);
+    trkdbg(3,0,0,"trkdbginit : page size is %d\n", pagesize);
+    /*
+        open the connection to the management socket.
+        If the manager is not listeing - forget it.
+        So - not fatal, continue with '!enable'.
+    */
+    trkdbg(3,0,0,"trkdbginit : client setup.\n", pagesize);
+    if(!clientInit()) enable=0;
+    
+    // Initialize the lists
+    {
+        int i;
+        for(i=0;i<MAXTAGS;i++)
+            LIST_INIT(&alist[i].list);
+    }
+    trkdbg(3,0,0,"trkdbginit : done enable=%d tracking=%d\n", enable, tracking);
+    initted++;
+    ininit=0;
+    
+}
+#ifdef __cplusplus
+}
+#endif
