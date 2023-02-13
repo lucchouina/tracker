@@ -1,13 +1,14 @@
 LDFLAGS += -pthread
+CFLAGS += -g -O
 
 .PHONY: force
-
-all: force trktest
-	LD_LIBRARY_PATH=../preload:../lib LD_PRELOAD=libtracker.so ./trktest
 
 trktest: trktest.c
 
 clean:
 	rm trktest
+
+run:
+	TRKDEBUG=0 LD_LIBRARY_PATH=../preload:../lib  LD_PRELOAD=libtracker.so gdb ./trktest
 
 install:

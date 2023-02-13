@@ -363,6 +363,7 @@ int dbgval;
     if(argc==2 && !strcmp(argv[1], "fd")) goto fdTest;
     
     fprintf(stderr, "hit a key to allocate in subbranches...");
+    read(0, &c, 1);
     func1();
     fprintf(stderr, "hit a key to allocate in 2 separate branches...");
     read(0, &c, 1);

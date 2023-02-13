@@ -9,7 +9,7 @@
 #define TRACKER_SOCKPATH "/var/tmp/trkdbg.sock"
 
 /* default configuration file path */
-#define TRACKER_CONFFILE "/etc/tracker.conf"
+#define TRACKER_CONFFILE "/usr/share/tracker/tracker.conf"
 
 #define MAXCALLERS  10
 #define MAXFDS      1024
@@ -33,7 +33,7 @@
 #define CLIENT_RPTFDSIZE(idx)       (RPTHEADERSIZE + (CLIENT_POINTER_SIZE(idx) * (MAXOPENERS)))  // add 2 xtra words for size and type
 #define toClientEntry(idx, i) ((uint32_t *)(base + (i*CLIENT_RPTSLOTSIZE(idx))))
 
-#define KEYBASE     12012
+#define KEYBASE     12013
 #define TAGCUR      100
 #define ACK_TIMEOUT 1   // seconds to 
 typedef enum {
@@ -52,7 +52,7 @@ void *rl_init(int idx);
 void rl_newChar(void *rl);
 
 /* Port for CLI clients */
-#define CLI_PORT 12012
+#define CLI_PORT 12013
 /*
     Enum of possible command exchanged
 */
@@ -100,12 +100,14 @@ typedef struct cmd_s {
 /* Application config inside trkmgr */
 typedef struct appdata_s {
 
-    char cname[100];
+    char prog[100];
+    char service[100];
     uint32_t flags;
     uint32_t tag;
     
 } appdata_t;
-#define MAXCNAME (sizeof(((appdata_t*)0)->cname))
+#define MAXPROG (sizeof(((appdata_t*)0)->prog))
+#define MAXSERVICE (sizeof(((appdata_t*)0)->service))
 
 typedef struct cdata_s {
 
@@ -119,9 +121,11 @@ typedef struct cdata_s {
     int reportTo;               /* What cli client wants that report */
     int subCmd;                 /* What to do with the report */
     char *pmore;                /* Report data */
-    char *name;                 /* program name */
+    char *prog;                 /* program name */
+    char *service;              /* service name */
     uint32_t seq;               /* for message sequencing */
-    appdata_t *adata;
+    appdata_t *adata;           /* tracking config */
+    void *dbghdl;               /* for dbg adddr2line lookups */
     char *snap;
     int snapsize;
     
@@ -162,10 +166,10 @@ int     clientInit(void);
 int     setupSig(void);
 void    dbgsetlvl(int level);
 int     dbggetlvl(void);
-void    setupDbg(void);
+void    setupDbg(int);
 void    setupClientDbg(void);
-appdata_t *getAppConfig(char *name);
-void    addAppConfig(char *name, int flags);
+appdata_t *getAppConfig(char *prog, char *service);
+void    addAppConfig(char *prog, char *service, int flags);
 int     sendCmdMore(int fd, int seq, int cmd, int aux, int aux2, int more, char *pmore, int (*cb)(char **buf));
 int     recvAck(int fd, uint32_t *seq);
 void    sendMgr(int cmd, int aux, int aux2);
@@ -181,6 +185,10 @@ int     trkmgrClientAskPush(int client, int idx);
 void    cliPrt(int idx, const char *fmt, ...);
 void    cliDecWait(int cidx);
 void    rlShowPrompt(void *rl, int reset);
+char    *getService(pid_t pid);
+char    *getCommand(pid_t pid);
+void processOneLineToApps(int idx, char *buf);
+
 
 void buildShowTree(int cliIdx, int clientIdx, int nentries, void **vector, size_t *total);
 int trkShell(char **output, int *err, const char *fmt, ...);

@@ -1,24 +1,20 @@
-OBJS = trkmgr.o trkmgrClient.o trkmgrCli.o trkmgrRl.o trkmgrHist.o trkTree.o
+OBJS = trkmgr.o trkmgrClient.o trkmgrCli.o trkmgrRl.o trkmgrHist.o trkTree.o addr2line.o
 LDFLAGS += -lpthread -rdynamic -lcurses -ltrkcommon -L../lib
-CFLAGS += -DTRACKER -I../lib/include 
+CFLAGS += -DTRACKER -I../lib/include -g -O
 PROG = trackerd
-INSTALL_PREFIX=../install
 
 # build
 ${PROG}: $(OBJS)
 	${CC} -o $@ ${OBJS} ${LDFLAGS}
 
 # INSTALL
-SRV_DIR=/etc/systemd/system
+SRV_DIR=/lib/systemd/system
 SRV_FILES=tracker.service
-CONF_DIR=/etc
+CONF_DIR=/usr/share/tracker
 CONF_FILES=tracker.conf
-EVO_ENV=015_tracker
-EVO_ENV_DIR=/usr/evo/env/common_env.d
-PROG_DIR=/usr/bin
 UTIL=tracker
 
-install: ${CONF_FILES} ${SRV_FILES} ${ENV_FILES} ${PROG}
+install: ${CONF_FILES} ${SRV_FILES} ${PROG}
 	install -m 755 -d ${INSTALL_PREFIX}/${CONF_DIR}
 	install -m 755 ${CONF_FILES} ${INSTALL_PREFIX}/${CONF_DIR}
 	install -m 755 -d ${INSTALL_PREFIX}/${SRV_DIR}
@@ -28,12 +24,19 @@ install: ${CONF_FILES} ${SRV_FILES} ${ENV_FILES} ${PROG}
 	install -m 755 -d ${INSTALL_PREFIX}/${PROG_DIR}
 	install -m 755 ${PROG} ${INSTALL_PREFIX}/${PROG_DIR}
 	install -m 755 ${UTIL} ${INSTALL_PREFIX}/${PROG_DIR}
-	install -m 755 -d ${INSTALL_PREFIX}/${EVO_ENV_DIR}
-	install -m 755 ${EVO_ENV} ${INSTALL_PREFIX}/${EVO_ENV_DIR}
 .PHONY: install
 
 clean: 
-	rm -f ${OBJS} ${PROG}
+	rm -f ${OBJS} ${PROG} addr2line_ut.o addr2line
+
+addr2line_ut.o: addr2line.c
+	${CC} -c -o $@ $(CFLAGS) $< -DUT
+
+addr2line: addr2line_ut.o
+	${CC} -o $@ addr2line_ut.o ../lib/trkcommon.o
+
+runaddr:
+	LD_LIBRARY_PATH=../lib gdb ./addr2line
 
 run: 
-	LD_LIBRARY_PATH=../lib ./trackerd -d -d -d -d -d -d -c tracker.testconf
+	LD_LIBRARY_PATH=../lib gdb --args ./trackerd -f -d -d -d -d -d -d -c tracker.testconf

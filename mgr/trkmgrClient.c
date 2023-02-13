@@ -16,6 +16,8 @@
 #endif
 
 #include "trkdbg.h"
+#include "addr2line.h"
+
 #define setfd(fd) if(fd >= 0) { if(fd>maxfd) maxfd=fd; FD_SET(fd, fdset); }
 
 cdata_t clients[100];
@@ -31,30 +33,90 @@ static void closeClient(int idx)
     if(clients[idx].reportTo>=0) cliDecWait(clients[idx].reportTo);
     close(clients[idx].fd);
     clients[idx].fd=-1;
-    free(clients[idx].name);
+    addrClose(clients[idx].dbghdl);
+    free(clients[idx].prog);
 }
 
-static void getCmdStr(int idx, int pid)
+char *getService(pid_t pid)
+{
+#define CPATH "/proc/%u/cgroup"
+    char cpath[sizeof CPATH+10];
+    int fd;
+    snprintf(cpath, sizeof cpath-1, CPATH, pid);
+    if((fd=open(cpath, O_RDONLY)) >= 0) {
+        char content[1000];
+        int n;
+        if((n=read(fd, content, sizeof content -1)) > 0) {
+            char *p=content;
+            content[n]='\0';
+            trkdbg(5,0,0, "Cgroup file =\n%s\n", content);
+            close(fd);
+            /* replace all newlines with '\0' */
+            while(*p) {
+                trkdbg(5,0,0, "*p = '%c'", *p);
+                if(*p == ':') {
+                    trkdbg(5,0,0, "strcmp with %12.12s", p+1);
+                    if(!strncmp(p+1,"name=systemd", 12)) {
+                        // found it
+                        char *last=p;
+                        trkdbg(5,0,0, "Found it");
+                        for(last=p; *p && *p != '\n'; p++) {
+                            if(*p=='/') last=p+1;
+                        }
+                        if(*p=='\n') *p='\0';
+                        trkdbg(5,0,0, "Returning '%s'", last);
+                        return strdup(last);
+                    }
+                    while(*p != '\n' && *p) p++;  // skip to end of line
+                    continue;
+                }
+                p++;
+            }
+        }
+        else close(fd);
+    }
+    else trkdbg(0,0,0, "failed to open '%s'", cpath);
+    return NULL;
+}
+
+char *getCommand(int pid)
 {
     char buf[32];
-    char prog_name[MAXCNAME];
+    char prog[MAXPROG];
+    char service[MAXPROG];
     char *stdout;;
     if(trkShell(&stdout, NULL, "cat /proc/%ld/comm", (long)pid)) {
         if(stdout) {
             stdout[strlen(stdout)-1]='\0';
-            strncpy(prog_name, stdout, sizeof prog_name-1);
+            strncpy(prog, stdout, sizeof prog-1);
             free(stdout);
-            goto gotit;
         }
+        return strdup(prog);
     }
+    return NULL;
+}
 
-    snprintf(prog_name, sizeof prog_name, "%s_%d", "unknown", pid);
-    
-gotit:
-    clients[idx].adata=getAppConfig(prog_name);
+static void getCmdStr(int idx, int pid)
+{
+    char *prog=getCommand(pid), *s;
+    char service[MAXPROG];
+    if(prog) {
+        /* now get the service */
+        if(s=getService(pid)) {
+            strncpy(service, s, sizeof service-1);
+        }
+        else strcpy(service, "unknown");
+    }
+    else {
+        trkdbg(1,0,0,"Problem reading comm for pid %d!\n", pid);
+        closeClient(idx);
+        return;
+    }
+    clients[idx].adata=getAppConfig(prog, service);
     clients[idx].pid=pid;
-    clients[idx].name=strdup(prog_name);
-    trkdbg(1,0,0,"Client '%s' pid %d registered.\n", prog_name, pid);
+    clients[idx].prog=prog;
+    clients[idx].service=strdup(service);
+    trkdbg(1,0,0,"Client '%s:%s' pid %d registered.\n", prog, service, pid);
 }
 
 static int getClientVsize(int idx)
@@ -101,7 +163,7 @@ void trkmgrClientWalkList(int idx, void (*cb)(int idx, int client, char *name))
 {
     uint32_t i;
     for(i=0;i<MAXCLIENTS;i++) {
-        if(clients[i].fd>=0) (*cb)(idx, i, clients[i].name);
+        if(clients[i].fd>=0) (*cb)(idx, i, clients[i].prog);
     }
 }
 
@@ -164,7 +226,7 @@ uint32_t i;
         }
         else  {
             if(flgmap[i].mask == FLAG_ENABLE) 
-                trkdbg(1,0,0,"Sending DISABLE to transiant client '%s'!\n", clients[idx].name);
+                trkdbg(1,0,0,"Sending DISABLE to transiant client '%s'!\n", clients[idx].prog);
             if(mgrSendCmd2(idx, CMD_SET, flgmap[i].cmd, 0) < 0) return;
         }
     }
@@ -177,12 +239,18 @@ static int clientRcvCB(int idx, cmd_t *cmd, int more, char *pmore)
     switch(cmd->cmd) {
         case CMD_REGISTER:     /* arg: pid*/
         {
-            int pid;
             trkdbg(1,0,0,"Received REGISTER on idx %d pid %d is64 %d.\n", idx, cmd->aux[0], cmd->aux[1]);
-            pid=cmd->aux[0];
+            clients[idx].pid=cmd->aux[0];
             clients[idx].is64=cmd->aux[1];
-            getCmdStr(idx, pid);
+            getCmdStr(idx, clients[idx].pid);
+            if(!clients[idx].adata) {
+            
+                trkdbg(1,0,0,"client %d '%s:%s' has no config, failing registration\n", idx, clients[idx].prog, clients[idx].service);
+                closeClient(idx);
+                return 0;
+            }
             clients[idx].needConfig=1;
+            clients[idx].dbghdl=addAddrPid(clients[idx].pid, clients[idx].prog);
             return 1;
         }
         break;
@@ -191,8 +259,8 @@ static int clientRcvCB(int idx, cmd_t *cmd, int more, char *pmore)
             trkdbg(1,0,0,"Received REPORT on idx %d pid %d.\n", idx, cmd->aux[0]);
             if(!cmd->aux[0]) {
                 if(summary) cliPrt(clients[idx].reportTo, "%-20s [pid %6d] [Proc Size : %6d] [Mallocated - total ->%6d - tagged -> %6d\n"
-                        , clients[idx].name, clients[idx].pid, getClientVsize(idx), cmd->aux[1], 0);
-                else cliPrt(clients[idx].reportTo, "Client '%s' pid %d : nothing to report.\n",clients[idx].name,clients[idx].pid);
+                        , clients[idx].prog, clients[idx].pid, getClientVsize(idx), cmd->aux[1], 0);
+                else cliPrt(clients[idx].reportTo, "Client '%s' pid %d : nothing to report.\n",clients[idx].prog,clients[idx].pid);
                 cliDecWait(clients[idx].reportTo);
             }
             else {
@@ -265,7 +333,7 @@ int segid;
                             size_t total;
                             if(!summary) {
                                 cliPrt(cliIdx, "==================================================================\n");
-                                cliPrt(cliIdx, "Start of report for registered %sbits client '%s' pid %d\n", clients[idx].is64?"64":"32", clients[idx].name, clients[idx].pid);
+                                cliPrt(cliIdx, "Start of report for registered %sbits client '%s' pid %d\n", clients[idx].is64?"64":"32", clients[idx].prog, clients[idx].pid);
                                 cliPrt(cliIdx, "==================================================================\n");
                             }
                             for(i=0;i<nentries;i++) vector[i]=mapaddr+sizeof(int)+(i*CLIENT_RPTSLOTSIZE(idx));
@@ -273,10 +341,10 @@ int segid;
                             buildShowTree(cliIdx, idx, nentries, vector, &total);
                             if(!summary) cliPrt(cliIdx, "==================================================================\n");
                             cliPrt(cliIdx, "%-20s [pid %6d] [Proc Size : %6d] [Mallocated - total ->%6d - tagged -> %10d\n"
-                                , clients[idx].name, clients[idx].pid, getClientVsize(idx), *((int*)mapaddr), total);
+                                , clients[idx].prog, clients[idx].pid, getClientVsize(idx), *((int*)mapaddr), total);
                             if(!summary) {
                                 cliPrt(cliIdx, "==================================================================\n");
-                                cliPrt(cliIdx, "End of report for registered %sbits client '%s' pid %d\n", clients[idx].is64?"64":"32", clients[idx].name, clients[idx].pid);
+                                cliPrt(cliIdx, "End of report for registered %sbits client '%s' pid %d\n", clients[idx].is64?"64":"32", clients[idx].prog, clients[idx].pid);
                                 cliPrt(cliIdx, "==================================================================\n");
                             }
                         }
@@ -313,7 +381,7 @@ int segid;
                                 size_t total;
                                 if(!summary) {
                                     cliPrt(cliIdx, "===========================================================\n");
-                                    cliPrt(cliIdx, "Start of report for registered %sbits client '%s' pid %d\n", clients[idx].name,  clients[idx].is64?"64":"32", clients[idx].pid);
+                                    cliPrt(cliIdx, "Start of report for registered %sbits client '%s' pid %d\n", clients[idx].prog,  clients[idx].is64?"64":"32", clients[idx].pid);
                                     cliPrt(cliIdx, "===========================================================\n");
                                 }
                                 for(i=0;i<nentries;i++) vector[i]=mapaddr+sizeof(int)+(i*CLIENT_RPTSLOTSIZE(idx));
@@ -322,10 +390,10 @@ int segid;
                                 buildShowTree(cliIdx, idx, nentries+nsnap, vector, &total);
                                 if(!summary) cliPrt(cliIdx, "===========================================================\n");
                                 cliPrt(cliIdx, "%-20s [pid %6d] [Proc Size : %6d] [Mallocated - total ->%6d - tagged -> %10d\n"
-                                    , clients[idx].name, clients[idx].pid, getClientVsize(idx), *((int*)mapaddr), total);
+                                    , clients[idx].prog, clients[idx].pid, getClientVsize(idx), *((int*)mapaddr), total);
                                 if(!summary) {
                                     cliPrt(cliIdx, "===========================================================\n");
-                                    cliPrt(cliIdx, "End of report for registered %sbits client '%s' pid %d\n", clients[idx].name,  clients[idx].is64?"64":"32", clients[idx].pid);
+                                    cliPrt(cliIdx, "End of report for registered %sbits client '%s' pid %d\n", clients[idx].prog,  clients[idx].is64?"64":"32", clients[idx].pid);
                                     cliPrt(cliIdx, "===========================================================\n");
                                 }
                             }

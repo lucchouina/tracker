@@ -83,24 +83,23 @@ int dbggetlvl(void)
     return dbglvl;
 }
 
-void setupDbg(void)
+#define LOGFILE "/var/log/trackerd.log"
+void setupDbg(int nofork)
 {
-    int fd=open("/var/log/trackerd.log", O_CREAT+O_APPEND+O_RDWR, 0644);
+    int fd;
+    if(nofork) fd=fileno(stderr);
+    else fd=open(LOGFILE, O_CREAT+O_APPEND+O_RDWR, 0644);
     if(fd>=0) dbgfd=fd;
-    trkdbg(0,0,0, "trk debug setup to fd %d\n", dbgfd);
+    trkdbg(0,0,0, "trk debug started to file '%s' fd %d\n", LOGFILE, dbgfd);
 }
 
 void setupClientDbg(void)
 {
     int fd, pid=getpid();
     char lfname[100];
-    sys_write(2, "#1\n", 3);
     snprintf(lfname, sizeof lfname-1, "/var/log/trackerd.client.log");
-    sys_write(2, "#2\n", 3);
     lfname[sizeof lfname-1]='\0';
-    sys_write(2, "#3\n", 3);
     if((fd=sys_open(lfname, O_CREAT+O_APPEND+O_RDWR, 0644)) >=0) dbgfd=fd;
-    sys_write(2, "#4\n", 3);
 }
 
 #define CMDLEN  sizeof(cmd_t)

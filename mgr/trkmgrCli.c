@@ -159,7 +159,8 @@ static int trkShellToClient(int idx, const char *cmdstr)
 {
     char *stdout=NULL;
     int ret;
-
+    cliPrt(idx, "Shell command\n");
+    cliPrt(idx, "==============================================\n");
     ret=trkShell(&stdout, NULL, "bash -c '%s' 2>&1", cmdstr);
     if(stdout) {
         int l=strlen(stdout);
@@ -175,40 +176,108 @@ static int trkShellToClient(int idx, const char *cmdstr)
         }
         free(stdout);
     }
-    cliPrt(idx, "invalid command '%s'\n\r", cmdstr);
+    cliPrt(idx, "==============================================\n");
     return ret;
 }
 
-/* add a PID to the list of tracked processes */
+static void showRules(int idx)
+{
+}
+
+/* add a program to the list of tracked processes */
 static void cmdAdd(int idx, int argc, char **argv)
 {
     int pid=-1;
     if(argc>1) {
-        pid=atoi(argv[01]);
-        if(pid>0) {
-            char *stdout=NULL;
 
-            /* first see what is the command and add it in case */
-            if(trkShell(&stdout, NULL, "tracker chk %d\n", pid)){
-                if(stdout) {
-                    char cmd[100];
-                    appdata_t *rules;
-                    /* add it */
-                    stdout[strlen(stdout)-1]='\0';
-                    rules=getAppConfig(stdout);
-                    /* no specific rules for it?  Add it*/
-                    if(!rules->cname[0]) {
-                        addAppConfig(stdout, rules->flags?rules->flags:FLAG_ENABLE+FLAG_POISON+FLAG_VALIDATE+FLAG_TRACK);
-                    }
-                    snprintf(cmd, sizeof cmd-1, "tracker add %d\n", pid); 
-                    trkShellToClient(idx, (const char *) cmd);
-                    free(stdout);
-                }
+        char *stdout=NULL;
+        pid_t pid=atoi(argv[1]);
+        if(pid > 0) {
+            char *service=getService(pid);
+            char *prog=getCommand(pid);
+            if(!prog || !service) {
+                cliPrt(idx, "Pid not found\n");
             }
-            else cliPrt(idx, "Could not find pid '%s'\n", argv[1]);            
+            else if(!getAppConfig(prog, service)) {
+            
+                cliPrt(idx, "Pid %d - No rules for program %s service %s found - not added\n", pid, prog, service);
+                cliPrt(idx, "Please add '%s,%s $flags' to the config file and 'killall -HUP tracker'\n", prog, service);
+            }
+            else {
+                trkShell(NULL, NULL, "tracker add %d %s", pid, service);
+            }
+            if(prog) free(prog);
+            if(service) free(service);
         }
-        else cliPrt(idx, "invalid pid '%s'\n", argv[1]);        
-    } else cliPrt(idx, "usage: add <pid>\n");  
+
+    } else cliPrt(idx, "usage: add <pid>,\n");  
+}
+
+static void cmdMatch(int idx, int argc, char **argv)
+{
+    if(argc>1) {
+        if(argc>4) {
+            char buf[1024];
+            snprintf(buf, sizeof buf, "%s %s %s", argv[1], argv[2], argv[3]);
+            buf[sizeof buf-1]='\0';
+            processOneLineToApps(idx, buf);
+        }
+        else cliPrt(idx, "usage: match OR match prog service rules\nType 'help' for examples\n");
+    }
+    else showRules(idx);
+}
+
+/* add a program to the list of tracked processes */
+static void cmdAddSource(int idx, int argc, char **argv)
+{
+    int pid=-1;
+    if(argc>1) {
+
+        char *stdout=NULL;
+        pid_t pid=atoi(argv[1]);
+        if(pid > 0) {
+            char *service=getService(pid);
+            char *prog=getCommand(pid);
+            if(!prog || !service) {
+                cliPrt(idx, "Pid not found\n");
+            }
+            else if(!getAppConfig(prog, service)) {
+            
+                cliPrt(idx, "Pid %d - No rules for program %s service %s found - not added\n", pid, prog, service);
+                cliPrt(idx, "Please add '%s,%s $flags' to the config file and 'killall -HUP tracker'\n", prog, service);
+            }
+            else {
+                trkShell(NULL, NULL, "tracker add %d %s", pid, service);
+            }
+            if(prog) free(prog);
+            if(service) free(service);
+        }
+
+    } else cliPrt(idx, "usage: addSource <pid>\n");  
+}
+
+/* add a program to the list of tracked processes */
+static void cmdRm(int idx, int argc, char **argv)
+{
+    int pid=-1;
+    if(argc>1) {
+
+        char *stdout=NULL;
+        pid_t pid=atoi(argv[1]);
+        if(pid > 0) {
+            char *service=getService(pid);
+            char *prog=getCommand(pid);
+            if(!prog || !service) {
+                cliPrt(idx, "Pid not found\n");
+            }
+            else {
+                trkShell(NULL, NULL, "tracker rm %d %s", pid, service);
+            }
+            if(prog) free(prog);
+            if(service) free(service);
+        }
+
+    } else cliPrt(idx, "usage: add program [service]ex: add mgd,\n");  
 }
 
 static int onoff2val(int idx, char *valstr)
@@ -459,18 +528,22 @@ static void cmdSreport(int idx, int argc, char **argv)
 
 static clicmd_t cmds[]={
 
-    { "help",   "Display the list of available commands.", cmdHelp, 0},                                                    
-    { "list",   "List all of the registered application names.", cmdList , 0},                                             
-    { "add",    "Register process PID. ex: add 1234", cmdAdd , 0},                                             
-    { "pop",    "Decrement the current allocation tag.", cmdPop, 0},         
-    { "push",   "Increment the current allocation tag.", cmdPush, 0},         
-    { "snap",   "Take a snapshot of all allocations call stack for later compare.", cmdSnap, 0},         
-    { "sreport","Show difference in allocation from all unique call stacks.", cmdSreport, 0},         
-    { "quit",   "exit the cli altogether",  cmdQuit, 0},                                                                   
-    { "report", "Report allocations. Usage is report [tag] [file]\n\r"
-      "             Examples: report 0 -or- report -or- report /tmp/report1 -or- report /tmp/foo 3\n\r"
-      "             Optional 'tag' defaults to current tag.\n\r"
-      "             Optional 'file' defaults to console.", cmdReport, 1},                     
+    { "help",            "Display the list of available commands.", cmdHelp, 0},                                                    
+    { "list",            "List all of the registered application names.", cmdList , 0},                                             
+    { "add pid $pid",    "Enable tracing of pid", cmdAdd , 0},                                             
+    { "match [rule]",    "Add a match top the original confg  \r\n"
+      "                   ex: match imgd * enable,track,validate,poison\r\n"
+      "                   match imgd from all services and enable all flags", cmdMatch , 0},                                             
+    { "sdebug pid",      "Enable source line in traces for pid", cmdAddSource , 0},                                             
+    { "pop",             "Decrement the current allocation tag.", cmdPop, 0},         
+    { "push",            "Increment the current allocation tag.", cmdPush, 0},         
+    { "snap",            "Take a snapshot of all allocations call stack for later compare.", cmdSnap, 0},         
+    { "sreport",         "Show difference in allocation from all unique call stacks.", cmdSreport, 0},         
+    { "quit",            "exit the cli altogether",  cmdQuit, 0},                                                                   
+    { "report [file] [tag]", "Report allocations\n\r"
+      "                  Examples: report 0 -or- report -or- report /tmp/report1 -or- report /tmp/foo 3\n\r"
+      "                  Optional 'tag' defaults to current tag.\n\r"
+      "                  Optional 'file' defaults to console.", cmdReport, 1},                     
     { "set",    "Set the value of memory tracking variables for the current scope. Usage : set <variable> <value>", cmdSet, 0},                           
 };
 #define MAXCMD (sizeof(cmds)/sizeof(cmds[0]))
@@ -480,7 +553,7 @@ static void cmdHelp(int idx, int argc, char **argv)
     uint32_t i;
     cliPrt(idx, "List of possible commands is :\n");
     for(i=0;i<MAXCMD; i++) {
-        cliPrt(idx, "%-10s - %s\n", cmds[i].name, cmds[i].description);
+        cliPrt(idx, "%-15s - %s\n", cmds[i].name, cmds[i].description);
     }
 }
 

@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <signal.h>
+#include <string.h>
 
 #include "trkdbg.h"
 
@@ -43,59 +44,68 @@ static appdata_t apps[100];
 static appdata_t defaultAppSettings={"", FLAG_ENABLE+FLAG_POISON+FLAG_VALIDATE+FLAG_TRACK,0};
 static appdata_t noMatchAppSettings={"", 0, 0};
 
-appdata_t *getAppConfig(char *name)
+appdata_t *getAppConfig(char *prog, char *service)
 {
     int idx;
-    
+    if(!prog || !prog[0]) prog="*";
+    if(!service || !service[0]) service="*";
     for(idx=0;idx<nApps;idx++) {
-        if(!strcmp(apps[idx].cname, name)) return &apps[idx];
+        int pmatch=0, smatch=0;
+        if(!strcmp(apps[idx].prog, "*")) pmatch=1;
+        else if(!strcmp(apps[idx].prog, prog)) pmatch=1;
+        if(!strcmp(apps[idx].service, "*")) smatch=1;
+        else if(!strcmp(apps[idx].service, service)) smatch++;
+        if(pmatch && smatch) {
+            trkdbg(1,0,0,"Returing setting %d, %s:%s\n", idx, apps[idx].prog, apps[idx].service);
+            return &apps[idx];
+        }
     }
-    trkdbg(1,0,0,"Returning %s settings for app '%s'\n", defaultsValid?"DEFAULT":"OFF", name);
-    return defaultsValid?&defaultAppSettings:&noMatchAppSettings;
+    trkdbg(1,0,0,"No rules matching %s:%s\n", prog, service);
+    return NULL;
 }
 
-void addAppConfig(char *name, int flags)
+void addAppConfig(char *prog, char *service, int flags)
 {
     if(nApps<MAXAPPS) {
-        strncpy(apps[nApps].cname, name, sizeof apps[nApps].cname-1);
+        strncpy(apps[nApps].prog, prog, sizeof apps[nApps].prog-1);
         apps[nApps].flags=flags;
         apps[nApps++].tag=0;
     }
     else trkdbg(0,0,0, "Reached max apps %d", MAXAPPS);
 }
 
-static const char *conffile=TRACKER_CONFFILE;
-static void readConf(void)
+static int processOneLine(appdata_t *app, char *buf, int line, int idx)
 {
-FILE *fc=fopen(conffile, "r");
-char buf[200];
-appdata_t newapps[MAXAPPS], *app=newapps;
-uint32_t n=0, line=1;
 int error=0;
+char *tok, *prog, *service;
 
-    if(!fc) {
-        trkdbg(0,1,0,"Could not access configuration file %s.\n", conffile);
-        trkdbg(0,0,0,"Application tracking is disabled by default.\n");
-        trkdbg(0,0,1,"Use CLI to enable tracking (requires application restart).\n");
-        return;
-    }
-    for(app=newapps; fgets(buf, sizeof buf -1, fc) && n<MAXAPPS; line++) {
-    
-        char *tok=strtok(buf, " \t\n\r");
-        char *name;
-        
-        if(!tok) continue;
+    while(1) {
+
+        tok=strtok(buf, " \t\n\r");
+        if(!tok) break;
+
         /* parse a single line */
         
-        if(tok[0]=='#') continue;
-        if(strlen(tok) >= MAXCNAME) {
+        if(tok[0]=='#') break;
+        service=strchr(tok, ',');
+        if(!service)  service=tok+strlen(tok); /* "" */
+        else *service++=0;
+        if(strlen(tok) >= MAXPROG) {
         
-            trkdbg(0,0,0,"Line %d: Application name '%s' too long [max:%d].\n", line, tok, MAXCNAME);
+            trkdbg(0,0,0,"Line %d: Application name '%s' too long [max:%d].\n", line, tok, MAXPROG);
+            if(idx>=0) cliPrt(idx,"Application name '%s' too long [max:%d].\n", tok, MAXPROG);
             error++;
-            continue;
+            break;
         }
-        name=tok;
+        if(strlen(service) >= MAXSERVICE) {
+        
+            trkdbg(0,0,0,"Line %d: Application name '%s' too long [max:%d].\n", line, service, MAXSERVICE);
+            if(idx>=0) cliPrt(idx,"Line %d: Application name '%s' too long [max:%d].\n", service, MAXSERVICE);
+            error++;
+            break;
+        }
         app->flags=app->tag=0;
+        prog=tok;
         while((tok=strtok(NULL, " \t,\r\n")) != NULL) {
 
             /* parse flags : find '=', get flags name, get on/off toten, get mask value */
@@ -105,39 +115,64 @@ int error=0;
             if(!(equal=strchr(tok, '='))) {
 
                 trkdbg(0,0,0,"Line %d: No '=' found in '%s'.\n", line, tok);
+                if(idx>=0) cliPrt(idx,"No '=' found in '%s'.\n", tok);
                 error++;
-                continue;
+                break;
             }
             *equal='\0';
             if((mask=flagMask(tok)) < 0) {
             
                 trkdbg(0,0,0,"Line %d: Invalid flag '%s'.\n", line, tok);
+                if(idx>=0) cliPrt(idx,"Invalid flag '%s'.\n", tok);
                 error++;
-                continue;
+                break;
             }
             equal++;
             if(!strcasecmp(equal, "on")) app->flags |= mask;
             else if(strcasecmp(equal, "off")) {
             
                 trkdbg(0,0,0,"Line %d: Invalid token should be on|off '%s'.\n", line, equal);
+                if(idx>=0) cliPrt(idx,"nvalid token should be on|off '%s'.\n", equal);
                 error++;
-                continue;
+                break;
             }
             else app->flags &= ~mask;
         }
-        trkdbg(1,0,0,"ReadConf app='%s'\n", name);
-        if(!strcmp(name,"*")) {
-            trkdbg(1,0,0,"Setting flags 0x%08x as default.\n", app->flags);
-            defaultsValid=1;
-            defaultAppSettings.flags=app->flags;
-        }
-        else {
-            
-            trkdbg(1,0,0,"Setting flags 0x%08x.\n", app->flags);
-            strncpy(app->cname, name, MAXCNAME);
-            app++;
-            n++;
-        }
+        trkdbg(1,0,0,"ReadConf prog='%s', service='%s'\n", prog, service);
+        trkdbg(1,0,0,"Setting flags 0x%08x\n", app->flags);
+        strncpy(app->prog, prog, MAXPROG);
+        strncpy(app->service, service, MAXSERVICE);
+        break;
+    }
+    return error;
+}
+
+void processOneLineToApps(int idx, char *buf)
+{
+     processOneLine(apps, buf, 0, idx);
+}
+
+static const char *conffile=TRACKER_CONFFILE;
+static void readConf(void)
+{
+FILE *fc=fopen(conffile, "r");
+char buf[200];
+appdata_t newapps[MAXAPPS], *app=newapps;
+uint32_t n, line=1;
+int error=0;
+
+    trkdbg(0,0,0,"readConf - fc = '%p' file is '%s'\n", fc, conffile);
+    if(!fc) {
+        trkdbg(0,1,0,"Could not access configuration file %s.\n", conffile);
+        trkdbg(0,0,0,"Application tracking is disabled by default.\n");
+        trkdbg(0,0,1,"Use CLI to enable tracking (requires application restart).\n");
+        return;
+    }
+    for(n=0; n<MAXAPPS; line++) {
+        if(!fgets(buf, sizeof buf -1, fc)) break;
+        trkdbg(2,0,0,"readConf - buf = '%s'\n", buf);
+        if(processOneLine(app, buf, line, -1)) app++;
+        n++;
     }
     if(error) {
         trkdbg(0,0,0,"%d errors detected, configuration file ignored.\n", error);
@@ -203,15 +238,14 @@ static void usage(void)
 
 int main(int argc, char **argv)
 {
-int c;
+int c, nofork=0;
         
     setSig();
     setupClientSocket();
     setupCliSocket();
-    setupDbg();
-
+    trkdbg(0,0,0,"Debug init is done\n");
     // parse command line arguments
-    while ((c = getopt(argc, argv, "dc:")) != EOF) {
+    while ((c = getopt(argc, argv, "fdc:")) != EOF) {
         switch (c) {
             case 'd':
                 dbgsetlvl(dbggetlvl()+1);
@@ -219,14 +253,18 @@ int c;
             case 'c':
                 conffile=optarg;
             break;
+            case 'f':
+                nofork=1;
+            break;
             default :  case '?':
                 usage();
         }
     }   
-    
+    setupDbg(nofork);
+    trkdbg(0,0,0,"Going to read config\n");
     readConf();
     
-    if(!dbggetlvl()) {
+    if(!nofork) {
         int pid;
         if((pid=fork())) {
             if(pid<0) trkdbg(0,1,1,"Fork failed.\n");

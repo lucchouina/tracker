@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include "trkdbg.h"
+#include "addr2line.h"
 
 extern int summary;
 
@@ -47,7 +48,7 @@ static void diveAndPrint(int cliIdx, int clientIdx, int idx, int indent, int max
         /* print that entry */
         if(!summary && size > 0) {
             if (is64) {
-                cliPrt(cliIdx, "%*s0x%016llx [%d] %c\n", indent*4, "", tref64[indent], size, indent? ' ': t);
+                cliPrt(cliIdx, "%*s0x%016llx [%d] %s %c\n", indent*4, "", tref64[indent], size, addr2line(clients[clientIdx].dbghdl, tref64[indent]), indent? ' ': t);
             }
             else {
                 cliPrt(cliIdx, "%*s0x%08x [%d] %c\n"   , indent*4, "", tref32[indent], size, indent? ' ': t);

@@ -1,10 +1,13 @@
-DIRS=lib preload mgr
+DIRS=lib preload mgr ut
+PROG_DIR=/usr/bin
+INSTALL_PREFIX=../install
+CFLAGS=-O -g -m64 -Wno-unused-result
+CXXFLAGS=-O -g -m64
+export PROG_DIR INSTALL_PREFIX CFLAGS CXXFLAGS
+
 clean_DIRS=$(addprefix clean_,$(DIRS))
 install_DIRS=$(addprefix install_,$(DIRS))
-CFLAGS=-O0 -g -m64
-CXXFLAGS=-O0 -g -m64
-export CFLAGS
-export CXXFLAGS
+
 all: $(DIRS)
 clean: $(clean_DIRS)
 install: $(install_DIRS)
@@ -16,6 +19,3 @@ $(clean_DIRS): force
 	rm -rf install
 $(install_DIRS): force
 	make -C $(patsubst install_%,%,$@) install
-
-ut: force
-	make -C ut

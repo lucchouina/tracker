@@ -1,2 +1,1 @@
-trktest enable=on,poison=on,track=on,validate=on
-trkload enable=on,poison=on,track=on,validate=on
+trktest,* enable=on,poison=on,track=on,validate=on

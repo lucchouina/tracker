@@ -446,26 +446,26 @@ static void *tp_alloc(size_t size, void* (*cb)(size_t, void*), void *data)
     uint32_t overhead;
     char *p;
     
-    trkdbg(0,0,0,"tp_alloc: size=%d (aligned size %d)\n", size, trkAlign(size));
+    trkdbg(2,0,0,"tp_alloc: size=%d (aligned size %d)\n", size, trkAlign(size));
     size=trkAlign(size);
     if(tracking) overhead=sizeof *tp;
     else overhead=(OFFSET_NWORDS) * sizeof(uint32_t);
 
     tpsize=overhead+size;
-    trkdbg(0,0,0,"Tpsize=%d overhead=%d tracking=%d cb=%p\n", tpsize, overhead, tracking, cb);
+    trkdbg(2,0,0,"Tpsize=%d overhead=%d tracking=%d cb=%p\n", tpsize, overhead, tracking, cb);
     p=(char*)cb(tpsize+sizeof(uint32_t), data);
-    trkdbg(0,0,0,"real.malloc(%p to %p for %d bytes)\n", p, p+tpsize+sizeof(uint32_t), tpsize+sizeof(uint32_t));
+    trkdbg(2,0,0,"real.malloc(%p to %p for %d bytes)\n", p, p+tpsize+sizeof(uint32_t), tpsize+sizeof(uint32_t));
     if(p) {
         // figure out where to put tp and our offset
         char *ph=(char*)(((size_t)p+overhead));
-        trkdbg(0,0,0,"malloc - p=%p ph=%p, delta=%d\n", p, ph, ph-p); 
+        trkdbg(2,0,0,"malloc - p=%p ph=%p, delta=%d\n", p, ph, ph-p); 
         curalloc += size;
-        trkdbg(0,0,0,"setting *(int32*)(%p+%d) [%p] to %08x\n", p, tpsize, p+tpsize, MAGIC1);
+        trkdbg(2,0,0,"setting *(int32*)(%p+%d) [%p] to %08x\n", p, tpsize, p+tpsize, MAGIC1);
         *(((int*)(p+tpsize)))=MAGIC1;
         if(tracking) {
         
             tp=((typeof(tp))ph)-1;
-            trkdbg(0,0,0,"tp=%p p=%p delta=%d\n", tp, p, (char*)tp-p); 
+            trkdbg(5,0,0,"tp=%p p=%p delta=%d\n", tp, p, (char*)tp-p); 
 
             // get the back track
             tp_gettrace(tp->callers, MAXCALLERS);
@@ -478,7 +478,7 @@ static void *tp_alloc(size_t size, void* (*cb)(size_t, void*), void *data)
             LOCK;
             LIST_INSERT_HEAD(&alist[tp->tag].list, tp, list);
             alist[tp->tag].total += size;
-            trkdbg(0,0,0,"Tracking return %p curalloc=%d, tag=%d\n", tp+1, curalloc, tp->tag);
+            trkdbg(2,0,0,"Tracking return %p curalloc=%d, tag=%d\n", tp+1, curalloc, tp->tag);
             dump(p, tpsize+sizeof(uint32_t));
             UNLOCK;
         }
@@ -488,7 +488,7 @@ static void *tp_alloc(size_t size, void* (*cb)(size_t, void*), void *data)
             pw[OFFSET_MAGIC]=MAGIC4;  // header
             pw[OFFSET_SIZE]=size;
             pw[OFFSET_OFFSET]=ph-(char*)p;
-            trkdbg(0,0,0,"Tagged return %p curalloc=%d\n", ph, curalloc);
+            trkdbg(2,0,0,"Tagged return %p curalloc=%d\n", ph, curalloc);
             dump(p, tpsize+sizeof(uint32_t));
         }
         return ph;
@@ -550,7 +550,7 @@ static void verify(void* vptr)
     }
     /* check the trailer? */
     else if(validate) {
-        trkdbg(0,0,0,"Testing trailer at %p+%d (%p) for value 0x%08x\n", ptr, pw[OFFSET_SIZE], ptr+pw[OFFSET_SIZE], MAGIC1);
+        trkdbg(5,0,0,"Testing trailer at %p+%d (%p) for value 0x%08x\n", ptr, pw[OFFSET_SIZE], ptr+pw[OFFSET_SIZE], MAGIC1);
         if(*((uint32_t*)(ptr+pw[OFFSET_SIZE])) != MAGIC1) {
 
             trkdbg(0,0,0,"Buffer overflow defected! Aborting...\n");
@@ -569,7 +569,7 @@ static void *tp_free(void *vptr)
         void *ppc;
         int nppc=0;
 
-        trkdbg(0,0,0, "free %p\n", vptr);
+        trkdbg(1,0,0, "free %p\n", vptr);
         verify(ptr);
         if(pw[OFFSET_MAGIC] == MAGIC3) {
             myfree(vptr);
@@ -619,13 +619,13 @@ static void *tp_free(void *vptr)
         trkdbg(0,0,0,"realfree(%p) from %p for (%d) %d\n", ptr-pw[OFFSET_OFFSET], ptr, pw[OFFSET_SIZE], pw[OFFSET_SIZE]+pw[OFFSET_OFFSET]);
         return ptr-pw[OFFSET_OFFSET];
     }
-    else myfree(ptr);
     return NULL;
 }
 
 void free(void *ptr)
 {
-    if((ptr=tp_free(ptr))) realFuncs.free(ptr);
+    if(ininit) myfree(ptr);
+    else if((ptr=tp_free(ptr))) realFuncs.free(ptr);
 }
 
 /*
@@ -638,7 +638,7 @@ void free(void *ptr)
 void *tp_realloc(void *ptr, size_t size, void* (*cb)(size_t, void*), void *data)
 {
     if(enable) {
-        trkdbg(0,0,0,"realloc - %p!\n", ptr);
+        trkdbg(1,0,0,"realloc - %p!\n", ptr);
         if(!ptr) {
             ptr=tp_alloc(size, cb, data);
             trkdbg(5,0,0,"realloc null ptr - returning %p!\n", ptr);
@@ -953,21 +953,21 @@ int missing=0;
     realFuncs.fork      = (type_fork*)    dlsym(RTLD_NEXT, sfname(fork));
     cplusInit();
     
-    trkdbg(0,0,0,"real %s=0x%08x\n", sfname(malloc), realFuncs.malloc);
-    trkdbg(0,0,0,"real %s=0x%08x\n", sfname(calloc), realFuncs.calloc);
-    trkdbg(0,0,0,"real realloc=0x%08x\n", realFuncs.realloc);
-    trkdbg(0,0,0,"real free=0x%08x\n", realFuncs.free);
-    trkdbg(0,0,0,"real memalign=0x%08x\n", realFuncs.memalign);
-    trkdbg(0,0,0,"real valloc=0x%08x\n", realFuncs.valloc);
-    trkdbg(0,0,0,"real dup=0x%08x\n", realFuncs.dup);
-    trkdbg(0,0,0,"real open=0x%08x\n", realFuncs.open);
-    trkdbg(0,0,0,"real creat=0x%08x\n", realFuncs.creat);
-    trkdbg(0,0,0,"real close=0x%08x\n", realFuncs.close);
-    trkdbg(0,0,0,"real pipe=0x%08x\n", realFuncs.pipe);
-    trkdbg(0,0,0,"real socket=0x%08x\n", realFuncs.socket);
-    trkdbg(0,0,0,"real accept=0x%08x\n", realFuncs.accept);
-    trkdbg(0,0,0,"real fork=0x%08x\n", realFuncs.fork);
-    trkdbg(0,0,0,"real %s=0x%08x\n", cplusfname(smap_shared_db_add), realFuncs.smap_shared_db_add);
+    trkdbg(1,0,0,"real %s=0x%08x\n", sfname(malloc), realFuncs.malloc);
+    trkdbg(1,0,0,"real %s=0x%08x\n", sfname(calloc), realFuncs.calloc);
+    trkdbg(1,0,0,"real realloc=0x%08x\n", realFuncs.realloc);
+    trkdbg(1,0,0,"real free=0x%08x\n", realFuncs.free);
+    trkdbg(1,0,0,"real memalign=0x%08x\n", realFuncs.memalign);
+    trkdbg(1,0,0,"real valloc=0x%08x\n", realFuncs.valloc);
+    trkdbg(1,0,0,"real dup=0x%08x\n", realFuncs.dup);
+    trkdbg(1,0,0,"real open=0x%08x\n", realFuncs.open);
+    trkdbg(1,0,0,"real creat=0x%08x\n", realFuncs.creat);
+    trkdbg(1,0,0,"real close=0x%08x\n", realFuncs.close);
+    trkdbg(1,0,0,"real pipe=0x%08x\n", realFuncs.pipe);
+    trkdbg(1,0,0,"real socket=0x%08x\n", realFuncs.socket);
+    trkdbg(1,0,0,"real accept=0x%08x\n", realFuncs.accept);
+    trkdbg(1,0,0,"real fork=0x%08x\n", realFuncs.fork);
+    trkdbg(1,0,0,"real %s=0x%08x\n", cplusfname(smap_shared_db_add), realFuncs.smap_shared_db_add);
 
     // need this for handling valloc()
     pagesize=sysconf(_SC_PAGESIZE);
