@@ -1,0 +1,84 @@
+#! /bin/bash
+#
+# tracker tool utility
+#
+#
+PS4='[$$] ${BASH_SOURCE}:${LINENO} - '
+exec 2>>/var/log/tracker.log
+set -x
+cmd=$1
+pid=$2
+service=$3
+sname="`echo $service | awk -F. '{print $1;}'`"
+edir="/etc/systemd/system/${service}.d"
+mkdir -p $edir
+envfile=${edir}/override.conf
+
+lib=libtracker.so
+
+getenv()
+{
+    eval `strings -a /proc/$pid/environ | egrep "^$1.*[=]"`
+}
+
+enabled()
+{
+    getenv LD_PRELOAD
+    [[ ${LD_PRELOAD} =~ $lib ]] && return 0
+    return 1
+}
+
+disabled()
+{
+    enabled && return 1
+    return 0
+}
+
+enable()
+{
+    if ! enabled
+    then
+        # basic systemd oveeride mechanism
+        getenv LD_PRELOAD
+        echo "Environment=\"LD_PRELOAD=${lib}:${LD_PRELOAD}\"" >> $envfile
+        echo "Environment=\"ld_preload=${lib}:${ld_preload}\"" >> $envfile
+    fi
+}
+
+disable()
+{
+    if ! disabled
+    then
+        cp $envfile /tmp/envfile
+        cat /tmp/envfile | grep -v "${lib}:" > $envfile
+    fi
+}
+
+# make sure the overload service unit file is primed
+[ -f $envfile ] || echo -e "[Service]\n" > $envfile
+
+if [ ! "$1" ]
+then
+    chvrf iri telnet 0 12013
+    exit 0
+elif [ "$1" == "add" ]
+then
+    test=disabled
+    action=enable
+    msg="not "
+elif [ "$1" == "rm" ]
+then
+    test=enabled
+    action=disable
+    msg=""
+fi
+if $test
+then
+    $action
+    systemctl daemon-reload
+    systemctl restart $service
+    echo "Tracking status for service '$service' is not ${action}d"
+else
+    echo "Pid $2 already ${msg}being tracked"
+fi
+exit 0
