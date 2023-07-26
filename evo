@@ -1,0 +1,55 @@
+#! /bin/bash
+# setup environment for EVO build of tracker
+[ "$1" -a "$2" ] || { echo "usage : $0 <targetIP> <node name>"; exit 1; }
+export thost="$1"
+export tnode="$2"
+shift 2
+# check that the sshpass command is present here
+password="Embe1mpls"
+sshpass=`which sshpass`
+ssh=`which ssh`
+if [ ! "$sshpass" ]
+then
+    # BASS users have sshpass renamed for security purpose
+    sshpass=`which noninteractive22`
+    if [ ! "$sshpass" ]
+    then
+       echo "Please install sshpass package with : sudo apt-get install sshpass"
+       exit 1
+    fi
+fi
+ssh="$sshpass -p Embe1mpls $ssh -o UserKnownHostsFile=/dev/null -o LogLevel=Quiet -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=3"
+echo "Gathering info on target"
+tfile="`mktemp /tmp/evoenv.XXXX`"
+$ssh "root@$thost" cat /sbin/bom.sh > $tfile
+. $tfile
+rm -f $tfile
+[ "$version" ] || { echo "Communication to node '$tnode', failed"; exit 1; }
+#
+# check that the node is known
+[ "$(type -t $tnode)" != "function" ] && { echo "Node '$tnode' not found. Valid node names are '${nodeNames[*]}'"; exit 1;}
+$tnode
+proot="/volume/evo/files/opt/poky/3.0.2-37" # default
+[ "$wrl_version" ] && proot=$wrl_version
+#
+# source the build environment for this arch
+# we map our veriants to the evo build pargets here
+declare -A archmaps
+archmaps["x86_64"]="core2-64"
+# extract the arch path of node variant
+# the wrl_version is assumed to be pointing us in the right distro already
+narch=$(echo $jim_variant | awk -F_ '{ under=""; for(i=3;i<=NF;i++) { printf("%s%s", under, $i); under="_"; } }')
+#
+# check that we have something for this arch
+if [ ! "${archmaps[$narch]}" ]
+then
+    echo "Arch $narch from node $tnode variant '$jim_variant', not found in map"
+    echo "Please fix this script to support this arch by expending associative array 'archmaps'"
+    exit 1
+fi 
+ldpath="$LD_LIBRARY_PATH"
+unset LD_LIBRARY_PATH
+. $wrl_version/environment-setup-${archmaps[$narch]}-poky-linux
+echo "environment for node $tnoe set to ${archmaps[$narch]}-poky-linux"
+$*
+exit $?
