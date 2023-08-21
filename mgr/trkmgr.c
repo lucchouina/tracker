@@ -30,6 +30,19 @@ uint32_t i;
     return -1;
 }
 
+static void flagsPR(int idx, uint32_t flags)
+{
+uint32_t i;
+char *p="";
+
+    for(i=0; i<NFLAGS; i++) {
+        if(flags & flgmap[i].mask) {
+            cliPrt(idx, "%s%s=on", flgmap[i].flgstr);
+            p=", ";
+        }
+    }
+}
+
 /*
     This is the TP memory debugging framework manager,
     Check out the wiki 'trkdbg' for an overview of the framework.
@@ -51,6 +64,7 @@ appdata_t *getAppConfig(char *prog, char *service)
     if(!service || !service[0]) service="*";
     for(idx=0;idx<nApps;idx++) {
         int pmatch=0, smatch=0;
+        trkdbg(1,0,0,"setting %d, %s:%s\n", idx, apps[idx].prog, apps[idx].service);
         if(!strcmp(apps[idx].prog, "*")) pmatch=1;
         else if(!strcmp(apps[idx].prog, prog)) pmatch=1;
         if(!strcmp(apps[idx].service, "*")) smatch=1;
@@ -80,7 +94,7 @@ int error=0;
 char *tok, *prog, *service;
 
     while(1) {
-
+        trkdbg(1,0,0, "processLine '%s'\n", buf);
         tok=strtok(buf, " \t\n\r");
         if(!tok) break;
 
@@ -132,7 +146,7 @@ char *tok, *prog, *service;
             else if(strcasecmp(equal, "off")) {
             
                 trkdbg(0,0,0,"Line %d: Invalid token should be on|off '%s'.\n", line, equal);
-                if(idx>=0) cliPrt(idx,"nvalid token should be on|off '%s'.\n", equal);
+                if(idx>=0) cliPrt(idx,"Invalid token should be on|off '%s'.\n", equal);
                 error++;
                 break;
             }
@@ -149,7 +163,24 @@ char *tok, *prog, *service;
 
 void processOneLineToApps(int idx, char *buf)
 {
-     processOneLine(apps, buf, 0, idx);
+    if(nApps < MAXAPPS) {
+        if(!processOneLine(apps+nApps, buf, 0, idx)) nApps++;
+    }
+    else {
+        cliPrt(idx, "Too many matches defined (max %d)\n", MAXAPPS);
+    }
+}
+
+void showMatches(int idx)
+{
+int n;
+appdata_t *app=&apps[0];
+
+    for(n=0; n<nApps; n++, app++) {
+        cliPrt(idx, "%s,%s ", app->prog, app->service);
+        flagsPR(idx, app->flags);
+        n++;
+    }
 }
 
 static const char *conffile=TRACKER_CONFFILE;

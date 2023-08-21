@@ -73,7 +73,7 @@ rl_t *rl=calloc(1, sizeof(*rl));
         /* initialize soem of the values */
         rl->maxh=DEF_HIST;       /* number of buffered commands */
         rl->maxl=DEF_LENGTH;     /* maximum command length */
-        rl->prompt=">";
+        rl->prompt="tracker> ";
         rl->notty=0;
         rl->width=80;
         rl->maxpos=0;

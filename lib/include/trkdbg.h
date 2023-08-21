@@ -9,7 +9,7 @@
 #define TRACKER_SOCKPATH "/var/tmp/trkdbg.sock"
 
 /* default configuration file path */
-#define TRACKER_CONFFILE "/usr/share/tracker/tracker.conf"
+#define TRACKER_CONFFILE "/usr/conf/tracker.conf"
 
 #define MAXCALLERS  10
 #define MAXFDS      1024
@@ -187,8 +187,8 @@ void    cliDecWait(int cidx);
 void    rlShowPrompt(void *rl, int reset);
 char    *getService(pid_t pid);
 char    *getCommand(pid_t pid);
-void processOneLineToApps(int idx, char *buf);
-
+void    processOneLineToApps(int idx, char *buf);
+void    showMatches(int idx);
 
 void buildShowTree(int cliIdx, int clientIdx, int nentries, void **vector, size_t *total);
 int trkShell(char **output, int *err, const char *fmt, ...);

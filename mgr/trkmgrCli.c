@@ -180,10 +180,6 @@ static int trkShellToClient(int idx, const char *cmdstr)
     return ret;
 }
 
-static void showRules(int idx)
-{
-}
-
 /* add a program to the list of tracked processes */
 static void cmdAdd(int idx, int argc, char **argv)
 {
@@ -216,44 +212,15 @@ static void cmdAdd(int idx, int argc, char **argv)
 static void cmdMatch(int idx, int argc, char **argv)
 {
     if(argc>1) {
-        if(argc>4) {
+        if(argc==3) {
             char buf[1024];
-            snprintf(buf, sizeof buf, "%s %s %s", argv[1], argv[2], argv[3]);
+            snprintf(buf, sizeof buf, "%s %s", argv[1], argv[2]);
             buf[sizeof buf-1]='\0';
             processOneLineToApps(idx, buf);
         }
-        else cliPrt(idx, "usage: match OR match prog service rules\nType 'help' for examples\n");
+        else cliPrt(idx, "usage: match prog[,service] rules\nType 'help' for examples\n");
     }
-    else showRules(idx);
-}
-
-/* add a program to the list of tracked processes */
-static void cmdAddSource(int idx, int argc, char **argv)
-{
-    int pid=-1;
-    if(argc>1) {
-
-        char *stdout=NULL;
-        pid_t pid=atoi(argv[1]);
-        if(pid > 0) {
-            char *service=getService(pid);
-            char *prog=getCommand(pid);
-            if(!prog || !service) {
-                cliPrt(idx, "Pid not found\n");
-            }
-            else if(!getAppConfig(prog, service)) {
-            
-                cliPrt(idx, "Pid %d - No rules for program %s service %s found - not added\n", pid, prog, service);
-                cliPrt(idx, "Please add '%s,%s $flags' to the config file and 'killall -HUP tracker'\n", prog, service);
-            }
-            else {
-                trkShell(NULL, NULL, "tracker add %d %s", pid, service);
-            }
-            if(prog) free(prog);
-            if(service) free(service);
-        }
-
-    } else cliPrt(idx, "usage: addSource <pid>\n");  
+    else showMatches(idx);
 }
 
 /* add a program to the list of tracked processes */
@@ -530,20 +497,19 @@ static clicmd_t cmds[]={
 
     { "help",            "Display the list of available commands.", cmdHelp, 0},                                                    
     { "list",            "List all of the registered application names.", cmdList , 0},                                             
-    { "add pid $pid",    "Enable tracing of pid", cmdAdd , 0},                                             
-    { "match [rule]",    "Add a match top the original confg  \r\n"
-      "                   ex: match imgd * enable,track,validate,poison\r\n"
-      "                   match imgd from all services and enable all flags", cmdMatch , 0},                                             
-    { "sdebug pid",      "Enable source line in traces for pid", cmdAddSource , 0},                                             
+    { "add",             "Enable tracing of pid", cmdAdd , 0},                                             
+    { "match",           "Add a match to the original confg  \r\n"
+      "                   ex: match ifmand,* enable=on,track=on,validate=on,poison=on\r\n"
+      "                   match ifmand,* enable=on,track=on,validate=on,poison=on", cmdMatch , 0},                                             
     { "pop",             "Decrement the current allocation tag.", cmdPop, 0},         
     { "push",            "Increment the current allocation tag.", cmdPush, 0},         
     { "snap",            "Take a snapshot of all allocations call stack for later compare.", cmdSnap, 0},         
     { "sreport",         "Show difference in allocation from all unique call stacks.", cmdSreport, 0},         
     { "quit",            "exit the cli altogether",  cmdQuit, 0},                                                                   
-    { "report [file] [tag]", "Report allocations\n\r"
-      "                  Examples: report 0 -or- report -or- report /tmp/report1 -or- report /tmp/foo 3\n\r"
-      "                  Optional 'tag' defaults to current tag.\n\r"
-      "                  Optional 'file' defaults to console.", cmdReport, 1},                     
+    { "report",          "Report allocations\n\r"
+      "                   Examples: report 0 -or- report -or- report /tmp/report1 -or- report /tmp/foo 3\n\r"
+      "                   Optional 'tag' defaults to current tag.\n\r"
+      "                   Optional 'file' defaults to console.", cmdReport, 1},                     
     { "set",    "Set the value of memory tracking variables for the current scope. Usage : set <variable> <value>", cmdSet, 0},                           
 };
 #define MAXCMD (sizeof(cmds)/sizeof(cmds[0]))
@@ -560,9 +526,12 @@ static void cmdHelp(int idx, int argc, char **argv)
 static clicmd_t *getCmd(char *name)
 {
     uint32_t i;
-    for(i=0;i<MAXCMD;i++) 
+    for(i=0;i<MAXCMD;i++) {
+        trkdbg(1,0,0, "cmd : %s v %s\n", cmds[i].name, name);
         if(!strcmp(cmds[i].name, name))
             return cmds+i;
+    }
+    trkdbg(1,0,0, "command notfound '%s'\n", name);
     return 0; 
 }
 

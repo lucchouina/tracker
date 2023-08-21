@@ -2,13 +2,19 @@
 # This file is the Systemd-unit-description file for tracker.
 #
 # This file is to be placed @
-#  /etc/systemd/system/tracker.service
+#  /lib/systemd/system/tracker.service
 #
 
 [Unit]
 Description=Tracker service
+After=xinetd-external
 
 [Service]
 Type=forking
 NotifyAccess=all
 ExecStart=/usr/bin/trackerd -d
+ExecStartPost=touch /tmp/trackeron
+ExecStopPost=rm -f /tmp/trackeron
+
+[Install]
+WantedBy=multi-user.target

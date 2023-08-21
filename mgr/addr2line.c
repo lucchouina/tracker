@@ -47,6 +47,7 @@ static void unlinkAddrPipe(addrpipe_t *pfree)
     for(p=pipes; p; p=p->next) {
         if(p==pfree) {
             *last=p->next;
+            free(p->filename);
             free(p);
             return;
         }
@@ -76,6 +77,7 @@ static addrpipe_t *addAddrPipe(char * const name)
     /* see if we alreadyhave a addr2line for this file */
     for(p=pipes; p; p=p->next) {
         if(!strcmp(p->filename, name)) {
+            trkdbg(0,0,0,"Found addrpoipe_t entry for - %s ref = %d\n", name, p->ref+1);
             p->ref++;
             return p;
         }
@@ -83,11 +85,14 @@ static addrpipe_t *addAddrPipe(char * const name)
     }
     
     /* don't have it... time to create it */
+    trkdbg(0,0,0,"Creating addrpoipe_t entry for - %s\n", name);
     p=calloc(sizeof *p, 1);
     p->filename=strdup(name);
 
     /* if the this is not a file don't fire addr2line */
     if(stat(name, &stats)) {
+        
+        trkdbg(0,0,0,"Creating addrpoipe_t entry for - %s\n", name);
         p->ref=1;
         p->rfd=p->wfd=-1;
         *last=p;
@@ -98,16 +103,17 @@ static addrpipe_t *addAddrPipe(char * const name)
         if(pipe(fds2) >= 0) {
             pid_t pid;
             if(!(pid=fork())) {
-                char * const argv[5]={ "[addr2line]", "-e", name, "-s", NULL };
+                char * const argv[10]={ "[addr2line]", "-e", name, "-s", "-p", NULL };
                 dup2(fds1[1], 1);
                 dup2(fds2[0], 0);
                 close(fds1[0]);
                 close(fds2[1]);
+                trkdbg(0,0,0,"Child execing for file '%s'\n", name);
                 execve("/usr/bin/addr2line", argv, NULL);
                 trkdbg(0,1,0,"warning - Pid %d execve failed\n", pid);
             }
             else if(pid > 0) {
-                trkdbg(1,0,0,"Pid %d child created for '%s'\n", pid, name);
+                trkdbg(0,0,0,"Pid %d child created for '%s'\n", pid, name);
                 p->pid=pid;
                 p->rfd=fds1[0];
                 p->wfd=fds2[1];
@@ -136,6 +142,7 @@ static addrpipe_t *addAddrPipe(char * const name)
 /* one pid and it's mappings */
 typedef struct fmapping_s {
 
+    char *fname;
     size_t start;
     size_t end;
     off_t offset;
@@ -171,6 +178,7 @@ static fmapping_t *addFileMapping(char * const fname, size_t start, size_t end, 
     fm->start=start;
     fm->end=end;
     fm->offset=offset;
+    fm->fname=strdup(fname);
     return fm;
 }
 
@@ -274,18 +282,27 @@ char *addr2line(void *vpm, size_t addr)
     pidmaps_t *pm=(pidmaps_t *)vpm;
     fmapping_t *fm;
 
+    trkdbg(2,0,0,"Looking up address %p for '%s'\n", addr, pm->prog);
     for(fm=pm->first; fm; fm=fm->next) {
     
+        trkdbg(2,0,0,"%p <= %p <= %p (%s)\n", fm->start, addr, fm->end, fm->fname);
         if(fm->start <= addr && fm->end >= addr) {
         
             if(fm->pipe->wfd>0) {
                 char saddr[40];
                 char dbginfo[2000];
-                snprintf(saddr, sizeof saddr, "0x%lx\n", addr-fm->start+fm->offset);
+                snprintf(saddr, sizeof saddr-1, "0x%lx\n", addr-1-fm->start+fm->offset); saddr[sizeof saddr]='\0';
+                trkdbg(2,0,0,"Writing %s to pipe start %p offset %p\n", saddr, fm->start, fm->offset);
                 if(write(fm->pipe->wfd, saddr, strlen(saddr)) == strlen(saddr)) {
                     int n;
-                    if((n=read(fm->pipe->rfd, dbginfo, sizeof dbginfo-1)) > 0) {
-                        dbginfo[n-1]='\0';
+                    if((n=read(fm->pipe->rfd, dbginfo, sizeof dbginfo-2)) > 0) {
+                        char *p;
+                        dbginfo[n+1]='\0';
+                        dbginfo[n]='\n';
+                        for(p=dbginfo; *p; p++) 
+                            if(*p=='\n') 
+                                *p=' ';
+                        trkdbg(2,0,0,"Got pipe data '%s'\n", dbginfo);
                         return strdup(dbginfo);
                     }
                     trkdbg(1,1,0,"Failed read  to fd %d\n", fm->pipe->rfd);

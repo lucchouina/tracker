@@ -320,8 +320,11 @@ static void myfree(void *ptr)
 
 #ifndef OLD_STYLE
 typedef struct ctx_s {
-    int max, n;
-    void **pc;
+    int max;        /* max records to put in the pc list */
+    int recorded;   /* how many we have recorded to PC yet */
+    int seen;       /* how many calls we have had to the libgcc_helper */
+    int skip;       /* how many initial values to skip over */
+    void **pc;      /* PC array to record too */
 } ctx_t;
 
 /* helper function for libgcc's _Unwind_Backtrace() */
@@ -329,8 +332,9 @@ static _Unwind_Reason_Code libgcc_helper(struct _Unwind_Context *ctx, void *a)
 {
     ctx_t *c=(ctx_t*)a;
     
-    if(c->n < c->max) c->pc[c->n++]=(void*)_Unwind_GetIP (ctx);
-    if(c->n == c->max) return _URC_END_OF_STACK;
+    if(c->seen++ < c->skip) return _URC_NO_REASON;
+    if(c->recorded < c->max) c->pc[c->recorded++]=(void*)_Unwind_GetIP (ctx);
+    if(c->recorded == c->max) return _URC_END_OF_STACK;
     return _URC_NO_REASON;
 }
 #endif
@@ -384,11 +388,13 @@ static int tp_gettrace(ptype *pc, int max)
 #else // NEW style
     ctx_t ctx;
     ctx.max=max;
-    ctx.n=0;
+    ctx.recorded=0;
+    ctx.skip=1;
+    ctx.seen=0;
     ctx.pc=(void**)pc;
     /* use the libgcc_s functions to unwind */
     _Unwind_Backtrace(libgcc_helper, &ctx);
-    i=ctx.n;
+    i=ctx.recorded;
 #endif // OLD_STYLE
     // zap the rest of them
     n=i;
@@ -616,7 +622,7 @@ static void *tp_free(void *vptr)
 
         }
         /* to the actual free */
-        trkdbg(0,0,0,"realfree(%p) from %p for (%d) %d\n", ptr-pw[OFFSET_OFFSET], ptr, pw[OFFSET_SIZE], pw[OFFSET_SIZE]+pw[OFFSET_OFFSET]);
+        trkdbg(2,0,0,"realfree(%p) from %p for (%d) %d\n", ptr-pw[OFFSET_OFFSET], ptr, pw[OFFSET_SIZE], pw[OFFSET_SIZE]+pw[OFFSET_OFFSET]);
         return ptr-pw[OFFSET_OFFSET];
     }
     return NULL;
