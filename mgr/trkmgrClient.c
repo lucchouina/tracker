@@ -258,9 +258,9 @@ static int clientRcvCB(int idx, cmd_t *cmd, int more, char *pmore)
             /* We got the full report back */
             trkdbg(1,0,0,"Received REPORT on idx %d pid %d.\n", idx, cmd->aux[0]);
             if(!cmd->aux[0]) {
-                if(summary) cliPrt(clients[idx].reportTo, "%-20s [pid %6d] [Proc Size : %6d] [Mallocated - total ->%6d - tagged -> %6d\n"
-                        , clients[idx].prog, clients[idx].pid, getClientVsize(idx), cmd->aux[1], 0);
-                else cliPrt(clients[idx].reportTo, "Client '%s' pid %d : nothing to report.\n",clients[idx].prog,clients[idx].pid);
+                //if(summary) cliPrt(clients[idx].reportTo, "%-20s [pid %6d] [Proc Size : %6d] [Mallocated - total ->%6d - tagged -> %6d\n"
+                //        , clients[idx].prog, clients[idx].pid, getClientVsize(idx), cmd->aux[1], 0);
+                //else cliPrt(clients[idx].reportTo, "Client '%s' pid %d : nothing to report.\n",clients[idx].prog,clients[idx].pid);
                 cliDecWait(clients[idx].reportTo);
             }
             else {
@@ -339,10 +339,9 @@ int segid;
                             for(i=0;i<nentries;i++) vector[i]=mapaddr+sizeof(int)+(i*CLIENT_RPTSLOTSIZE(idx));
                             qsort(vector, nentries, sizeof *vector, cmpBackTraces);
                             buildShowTree(cliIdx, idx, nentries, vector, &total);
-                            if(!summary) cliPrt(cliIdx, "==================================================================\n");
-                            cliPrt(cliIdx, "%-20s [pid %6d] [Proc Size : %6d] [Mallocated - total ->%6d - tagged -> %10d\n"
-                                , clients[idx].prog, clients[idx].pid, getClientVsize(idx), *((int*)mapaddr), total);
                             if(!summary) {
+                                cliPrt(cliIdx, "==================================================================\n");
+                                cliPrt(cliIdx, "%-20s [pid %6d] [Proc Size : %6d] [Mallocated - total ->%6d - tagged -> %10d\n", clients[idx].prog, clients[idx].pid, getClientVsize(idx), *((int*)mapaddr), total);
                                 cliPrt(cliIdx, "==================================================================\n");
                                 cliPrt(cliIdx, "End of report for registered %sbits client '%s' pid %d\n", clients[idx].is64?"64":"32", clients[idx].prog, clients[idx].pid);
                                 cliPrt(cliIdx, "==================================================================\n");

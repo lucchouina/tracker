@@ -44,9 +44,9 @@ static void diveAndPrint(int cliIdx, int clientIdx, int idx, int indent, int max
         }
         /* tally Total */
         if(total) *total+=size;
-
+        if(summary) cliPrt(cliIdx, "%s:%d ", clients[clientIdx].prog, clients[clientIdx].pid);
         /* print that entry */
-        if(!summary && size > 0) {
+        {
             if (is64) {
                 cliPrt(cliIdx, "%*s0x%016llx [%d] %s %c\n", indent*4, "", tref64[indent], size, addr2line(clients[clientIdx].dbghdl, tref64[indent]), indent? ' ': t);
             }
@@ -55,7 +55,7 @@ static void diveAndPrint(int cliIdx, int clientIdx, int idx, int indent, int max
             }
         }
         /* print all the other sub-levels */
-        while(indent<MAXCALLERS-1) {
+        if(!summary) while(indent<MAXCALLERS-1) {
             if(is64) { if(!tref64[indent+1]) break; }
             else { if(!tref32[indent+1]) break; }
             diveAndPrint(cliIdx, clientIdx, idx, indent+1, i, vector, 0);
@@ -69,5 +69,5 @@ void buildShowTree(int cliIdx, int clientIdx, int nentries, void **vector, size_
 {
     *total=0;
     diveAndPrint(cliIdx, clientIdx, 0, 0, nentries, vector, total);
-    cliPrt(cliIdx, "Total allocated : %d\n", *total);
+    if(!summary) cliPrt(cliIdx, "Total allocated : %d\n", *total);
 }

@@ -248,7 +248,7 @@ int clientInit(void)
     if(!connectToMgr(1)) {
     
         trkdbg(0,0,0,"Could not connect to trkmgr - Memory debug disabled.\n");
-        trkdbg(0,0,0,"Please start trkmgr and restart this application.\n");
+        trkdbg(0,0,0,"Please start tracker and restart this application.\n");
     }
     else {
         /*  While we hold the main thread, make sure w get all config
