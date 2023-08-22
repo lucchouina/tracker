@@ -196,7 +196,7 @@ int error=0;
     if(!fc) {
         trkdbg(0,1,0,"Could not access configuration file %s.\n", conffile);
         trkdbg(0,0,0,"Application tracking is disabled by default.\n");
-        trkdbg(0,0,1,"Use CLI to enable tracking (requires application restart).\n");
+        trkdbg(0,0,0,"Use CLI to enable tracking (requires application restart).\n");
         return;
     }
     for(n=0; n<MAXAPPS; line++) {
