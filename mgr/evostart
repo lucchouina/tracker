@@ -1,1 +1,1 @@
-[ -f /tmp/trackeron ] && [ "$evoUi" ] && ld_preload="${ld_preload}:libtracker.so"
+[ -f /tmp/trackeron ] && ld_preload="${ld_preload}:libtracker.so"
