@@ -90,7 +90,7 @@ void addAppConfig(char *prog, char *service, int flags)
 
 static int processOneLine(appdata_t *app, char *buf, int line, int idx)
 {
-int error=0;
+int error=1;
 char *tok, *prog, *service;
 
     while(1) {
@@ -108,14 +108,12 @@ char *tok, *prog, *service;
         
             trkdbg(0,0,0,"Line %d: Application name '%s' too long [max:%d].\n", line, tok, MAXPROG);
             if(idx>=0) cliPrt(idx,"Application name '%s' too long [max:%d].\n", tok, MAXPROG);
-            error++;
             break;
         }
         if(strlen(service) >= MAXSERVICE) {
         
             trkdbg(0,0,0,"Line %d: Application name '%s' too long [max:%d].\n", line, service, MAXSERVICE);
             if(idx>=0) cliPrt(idx,"Line %d: Application name '%s' too long [max:%d].\n", service, MAXSERVICE);
-            error++;
             break;
         }
         app->flags=app->tag=0;
@@ -130,7 +128,6 @@ char *tok, *prog, *service;
 
                 trkdbg(0,0,0,"Line %d: No '=' found in '%s'.\n", line, tok);
                 if(idx>=0) cliPrt(idx,"No '=' found in '%s'.\n", tok);
-                error++;
                 break;
             }
             *equal='\0';
@@ -138,7 +135,6 @@ char *tok, *prog, *service;
             
                 trkdbg(0,0,0,"Line %d: Invalid flag '%s'.\n", line, tok);
                 if(idx>=0) cliPrt(idx,"Invalid flag '%s'.\n", tok);
-                error++;
                 break;
             }
             equal++;
@@ -147,7 +143,6 @@ char *tok, *prog, *service;
             
                 trkdbg(0,0,0,"Line %d: Invalid token should be on|off '%s'.\n", line, equal);
                 if(idx>=0) cliPrt(idx,"Invalid token should be on|off '%s'.\n", equal);
-                error++;
                 break;
             }
             else app->flags &= ~mask;
@@ -156,6 +151,7 @@ char *tok, *prog, *service;
         trkdbg(1,0,0,"Setting flags 0x%08x\n", app->flags);
         strncpy(app->prog, prog, MAXPROG);
         strncpy(app->service, service, MAXSERVICE);
+        error=0;
         break;
     }
     return error;
@@ -202,8 +198,10 @@ int error=0;
     for(n=0; n<MAXAPPS; line++) {
         if(!fgets(buf, sizeof buf -1, fc)) break;
         trkdbg(2,0,0,"readConf - buf = '%s'\n", buf);
-        if(processOneLine(app, buf, line, -1)) app++;
-        n++;
+        if(!processOneLine(app, buf, line, -1)) {
+            app++;
+            n++;
+        }
     }
     if(error) {
         trkdbg(0,0,0,"%d errors detected, configuration file ignored.\n", error);
