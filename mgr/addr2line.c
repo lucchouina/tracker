@@ -39,6 +39,7 @@ typedef struct addrpipe_s {
 } addrpipe_t;
 
 static addrpipe_t *pipes=NULL;
+extern int showlibs;
 
 /* unlink a pipe with no refs left */
 static void unlinkAddrPipe(addrpipe_t *pfree)
@@ -294,12 +295,17 @@ char *addr2line(void *vpm, size_t addr)
                 snprintf(saddr, sizeof saddr-1, "0x%lx\n", addr-1-fm->start+fm->offset); saddr[sizeof saddr]='\0';
                 trkdbg(2,0,0,"Writing %s to pipe start %p offset %p\n", saddr, fm->start, fm->offset);
                 if(write(fm->pipe->wfd, saddr, strlen(saddr)) == strlen(saddr)) {
-                    int n;
-                    if((n=read(fm->pipe->rfd, dbginfo, sizeof dbginfo-2)) > 0) {
+                    int n, pos=0;
+                    if(showlibs) {
+                        strncat(dbginfo, fm->fname, sizeof dbginfo-1);
+                        strncat(dbginfo, " : ", sizeof dbginfo-1);
+                        pos=strlen(dbginfo);
+                    }
+                    if((n=read(fm->pipe->rfd, dbginfo+pos, sizeof dbginfo-2-pos)) > 0) {
                         char *p;
-                        dbginfo[n+1]='\0';
-                        dbginfo[n]='\n';
-                        for(p=dbginfo; *p; p++) 
+                        dbginfo[pos+n+1]='\0';
+                        dbginfo[pos+n]='\n';
+                        for(p=dbginfo+pos; *p; p++) 
                             if(*p=='\n') 
                                 *p=' ';
                         trkdbg(2,0,0,"Got pipe data '%s'\n", dbginfo);
@@ -316,6 +322,7 @@ char *addr2line(void *vpm, size_t addr)
 }
 
 #if UT
+int showlibs=1;
 int main(int argc, char **argv)
 {
     void *vpm1=addAddrPid(getpid(), argv[0]);

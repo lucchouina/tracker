@@ -49,6 +49,8 @@ extern cli_t cli[10];
 #define MAXSCOPE    (sizeof(cli[0].scope)/sizeof(cli[0].scope[0]))
 #define MAXIP       (sizeof(cli[0].ipStr))
 int summary=0;
+int lines=0;
+int showlibs=0;
 cli_t cli[10];
 
 void cliPrt(int idx, const char *cfmt, ...)
@@ -290,7 +292,7 @@ char *fname=0;
     cli[idx].tag=TAGCUR;
     cli[idx].subCmd=subCmd;
     if(argc==2) {
-        if(argv[1][0]>='0' && argv[1][0]<='9') cli[idx].tag=atoi(argv[1]);
+        if((argv[1][0]>='0' && argv[1][0]<='9') || argv[1][0] == '-') cli[idx].tag=atoi(argv[1]);
         else {
             fname=argv[2];
         }
@@ -384,8 +386,12 @@ static void cmdSet(int idx, int argc, char **argv)
     if(argc<2) {
         cliPrt(idx, "Usage is : set <variable> <value>\n");
         cliPrt(idx, "Possibilities are:\n");
+        cliPrt(idx, "     lines on|off\n");
+        cliPrt(idx, "        Turn on|off 'file:line#' information for addresses of the reports\n");
         cliPrt(idx, "     summary on|off\n");
-        cliPrt(idx, "        Turn on summary mode for reports.\n");
+        cliPrt(idx, "        Turn on summary mode for reports (default: off)\n");
+        cliPrt(idx, "     showlibs on|off\n");
+        cliPrt(idx, "        Show library paths in the stack frames (default : off)\n");
         cliPrt(idx, "     validate on|off\n");
         cliPrt(idx, "        Turn on validation code in scoped applications.\n");
         cliPrt(idx, "     tracking on|off\n");
@@ -397,7 +403,9 @@ static void cmdSet(int idx, int argc, char **argv)
         cliPrt(idx, "     tag      <int value>\n");
         cliPrt(idx, "        Change the tag value associated with each allocations. Only used when 'tracking' is enabled\n");
         cliPrt(idx, "     debug <debug Level>\n");
-        cliPrt(idx, "        Set debug verbosity level to 'debug level'.\n");
+        cliPrt(idx, "        Set debug verbosity level to 'debug level' for the manager itself (/var/log/tracked.log).\n");
+        cliPrt(idx, "     cdebug <debug Level>\n");
+        cliPrt(idx, "        Set debug verbosity level to 'debug level' for clients that are in scope (/var/log/tracked.client.log\n");
         cliPrt(idx, "     scope    <name1>[ <name2> [ name3]]\n");
         cliPrt(idx, "        Set the list of applications to which the following command will apply. The application names\n");
         cliPrt(idx, "        can be selected from the output of the 'list' command. But a name of an application that as yet\n");
@@ -417,6 +425,18 @@ static void cmdSet(int idx, int argc, char **argv)
             summary=val;
         }
     }
+    else if(!strcmp(argv[1], "showlibs")) {
+        int val;
+        if((val=onoff2val(idx, argv[2]))>=0){
+            showlibs=val;
+        }
+    }
+    else if(!strcmp(argv[1], "lines")) {
+        int val;
+        if((val=onoff2val(idx, argv[2]))>=0){
+            lines=val;
+        }
+    }
     else if(!strcmp(argv[1], "tracking")) {
         int val;
         if(argc < 3) getAppVar(idx, "tracking", CMD_TRACK);
@@ -433,10 +453,16 @@ static void cmdSet(int idx, int argc, char **argv)
     }
     else if(!strcmp(argv[1], "debug")) {
         int val;
+        if(argc < 3) cliPrt(idx, "%d\n", dbggetlvl());
+        else if((val=atoi(argv[2]))>=0){
+            dbgsetlvl(val);
+        }
+    }
+    else if(!strcmp(argv[1], "cdebug")) {
+        int val;
         if(argc < 3) getAppVar(idx, "debug", CMD_DEBUG);
         else if((val=atoi(argv[2]))>=0){
             setAppVar(idx, "debug", CMD_DEBUG, val);
-            dbgsetlvl(val);
         }
     }
     else if(!strcmp(argv[1], "tag")) {

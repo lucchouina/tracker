@@ -50,6 +50,8 @@ static void report(void)
     int tag=sendReport-1;
     sendReport=0;
     if(tag == TAGCUR) tag=alloctag;
+    else if(tag<0) tag=alloctag+tag;
+    if(tag<0) tag=0;
     libSendReport(sock, tag);
 }
 

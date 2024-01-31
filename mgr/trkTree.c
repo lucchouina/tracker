@@ -2,7 +2,7 @@
 #include "trkdbg.h"
 #include "addr2line.h"
 
-extern int summary;
+extern int summary, lines;
 
 __inline__ static char typeChar(resType_t type)
 {
@@ -48,7 +48,10 @@ static void diveAndPrint(int cliIdx, int clientIdx, int idx, int indent, int max
         /* print that entry */
         {
             if (is64) {
-                cliPrt(cliIdx, "%*s0x%016llx [%d] %s %c\n", indent*4, "", tref64[indent], size, addr2line(clients[clientIdx].dbghdl, tref64[indent]), indent? ' ': t);
+                char *s="";
+                if(lines) s=addr2line(clients[clientIdx].dbghdl, tref64[indent]);
+                cliPrt(cliIdx, "%*s0x%016llx [%d] %s %c\n", indent*4, "", tref64[indent], size, s, indent? ' ': t);
+                if(lines) free(s);
             }
             else {
                 cliPrt(cliIdx, "%*s0x%08x [%d] %c\n"   , indent*4, "", tref32[indent], size, indent? ' ': t);

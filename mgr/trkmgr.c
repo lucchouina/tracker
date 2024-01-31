@@ -15,8 +15,8 @@ flgmap_t flgmap[] = {
 
     { "enable", FLAG_ENABLE, CMD_ENABLE},
     { "poison", FLAG_POISON, CMD_POISON},
-    { "validate", FLAG_TRACK, CMD_TRACK},
-    { "track", FLAG_VALIDATE, CMD_VALIDATE},
+    { "validate", FLAG_VALIDATE, CMD_VALIDATE},
+    { "track", FLAG_TRACK, CMD_TRACK},
 };
 uint32_t NFLAGS=(sizeof(flgmap)/sizeof(flgmap[0]));
 static int flagMask(char *flag)
@@ -37,8 +37,8 @@ char *p="";
 
     for(i=0; i<NFLAGS; i++) {
         if(flags & flgmap[i].mask) {
-            cliPrt(idx, "%s%s=on", flgmap[i].flgstr);
-            p=", ";
+            cliPrt(idx, "%s%s=on", p, flgmap[i].flgstr);
+            p=",";
         }
     }
 }
@@ -175,6 +175,7 @@ appdata_t *app=&apps[0];
     for(n=0; n<nApps; n++, app++) {
         cliPrt(idx, "%s,%s ", app->prog, app->service);
         flagsPR(idx, app->flags);
+        cliPrt(idx, "\n");
         n++;
     }
 }

@@ -290,7 +290,7 @@ void *ptr=mymalloc(nelem*elsize);
 }
 static void myfree(void *ptr)
 {
-    if(*(int*)(((char*)ptr)-sizeof(int)) != MAGIC3) {
+    if(ptr && *(int*)(((char*)ptr)-sizeof(int)) != MAGIC3) {
         if(realFuncs.free) realFuncs.free(ptr);
         else {
             trkdbg(0,0,0,"Early free of invalid pointer\n");
@@ -389,7 +389,7 @@ static int tp_gettrace(ptype *pc, int max)
     ctx_t ctx;
     ctx.max=max;
     ctx.recorded=0;
-    ctx.skip=1;
+    ctx.skip=2;
     ctx.seen=0;
     ctx.pc=(void**)pc;
     /* use the libgcc_s functions to unwind */
@@ -740,7 +740,7 @@ static void newFd(int fd)
 {
     if(!enable) return;
     if(fdIsValid(fd)) {
-        tp_gettrace(fds[fd].opener, MAXOPENERS);
+        if(tracking) tp_gettrace(fds[fd].opener, MAXOPENERS);
         if(!fds[fd].inUse) {
             fds[fd].inUse=1;     
             fds[fd].tag=alloctag;  
@@ -935,7 +935,7 @@ int missing=0;
         }
     }
     
-    trkdbg(3,0,0,"trkdbginit : start\n");
+    trkdbg(3,0,0,"trkdbginit : start dbglvl=%d\n", dbgval);
     if(dlsym(RTLD_NEXT, "si_socket_api_init")) {
         ((void (*)(void)) dlsym(RTLD_NEXT, "si_socket_api_init"))();
     }
